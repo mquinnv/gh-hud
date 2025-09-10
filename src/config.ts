@@ -78,22 +78,42 @@ export class ConfigManager {
       repos.add(repo)
     }
 
-    // Add repositories from organizations
+    // Add repositories from organizations with timeout protection
     for (const org of this.organizations) {
-      const orgRepos = await githubService.listRepositories(org)
-      for (const repo of orgRepos) {
-        repos.add(repo.fullName)
+      try {
+        console.error(`Fetching repositories for org: ${org}`)
+        const orgRepos = await Promise.race([
+          githubService.listRepositories(org),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 15000))
+        ])
+        for (const repo of orgRepos) {
+          repos.add(repo.fullName)
+        }
+        console.error(`Found ${orgRepos.length} repos for ${org}`)
+      } catch (error) {
+        console.error(`Failed to fetch repos for org ${org}:`, error)
+        // Continue with other orgs
       }
     }
 
     // Also add user's personal repositories if no specific config
     if (repos.size === 0) {
-      const userRepos = await githubService.listRepositories()
-      for (const repo of userRepos) {
-        repos.add(repo.fullName)
+      try {
+        console.error('Fetching user repositories')
+        const userRepos = await Promise.race([
+          githubService.listRepositories(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 15000))
+        ])
+        for (const repo of userRepos) {
+          repos.add(repo.fullName)
+        }
+        console.error(`Found ${userRepos.length} user repos`)
+      } catch (error) {
+        console.error('Failed to fetch user repos:', error)
       }
     }
 
+    console.error(`Total repositories to monitor: ${repos.size}`)
     return Array.from(repos)
   }
 }

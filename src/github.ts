@@ -12,7 +12,7 @@ export class GitHubService {
         args.push(org)
       }
 
-      const { stdout } = await execa('gh', args)
+      const { stdout } = await execa('gh', args, { timeout: 10000 })
       const repos = JSON.parse(stdout)
       
       return repos.map((repo: any) => ({
@@ -21,6 +21,10 @@ export class GitHubService {
         fullName: `${repo.owner.login}/${repo.name}`
       }))
     } catch (error) {
+      // Check if it's a rate limit error
+      if (error instanceof Error && error.message?.includes('API rate limit exceeded')) {
+        throw new Error('GitHub API rate limit exceeded. Please wait before trying again.')
+      }
       // Silently fail for now, could log to file if needed
       return []
     }
@@ -41,7 +45,7 @@ export class GitHubService {
         limit.toString(),
         '--json',
         'databaseId,name,headBranch,headSha,number,event,status,conclusion,workflowDatabaseId,workflowName,url,createdAt,updatedAt,startedAt'
-      ])
+      ], { timeout: 10000 })
 
       const runs = JSON.parse(stdout)
       const [owner, name] = repo.split('/')
@@ -69,6 +73,10 @@ export class GitHubService {
       this.setCache(cacheKey, workflowRuns)
       return workflowRuns
     } catch (error) {
+      // Check if it's a rate limit error  
+      if (error instanceof Error && error.message?.includes('API rate limit exceeded')) {
+        throw new Error('GitHub API rate limit exceeded. Please wait before trying again.')
+      }
       // Silently fail for now, could log to file if needed
       return []
     }
@@ -88,7 +96,7 @@ export class GitHubService {
         repo,
         '--json',
         'jobs'
-      ])
+      ], { timeout: 10000 })
 
       const data = JSON.parse(stdout)
       const jobs: WorkflowJob[] = data.jobs || []
@@ -111,7 +119,7 @@ export class GitHubService {
         repo,
         '--json',
         'status,conclusion,jobs'
-      ])
+      ], { timeout: 10000 })
 
       return stdout
     } catch (error) {

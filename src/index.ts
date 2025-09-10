@@ -38,14 +38,21 @@ program
     }
 
     // Handle graceful shutdown
-    process.on('SIGINT', () => {
+    const cleanup = () => {
+      console.error('\nShutting down...')
       app.stop()
       process.exit(0)
-    })
-
-    process.on('SIGTERM', () => {
-      app.stop()
-      process.exit(0)
+    }
+    
+    process.on('SIGINT', cleanup)
+    process.on('SIGTERM', cleanup)
+    process.on('SIGUSR1', cleanup)
+    process.on('SIGUSR2', cleanup)
+    
+    // Handle uncaught exceptions
+    process.on('uncaughtException', (error) => {
+      console.error('Uncaught exception:', error)
+      cleanup()
     })
   })
 
@@ -72,14 +79,21 @@ program
     }
 
     // Handle graceful shutdown
-    process.on('SIGINT', () => {
+    const cleanup = () => {
+      console.error('\nShutting down...')
       app.stop()
       process.exit(0)
-    })
-
-    process.on('SIGTERM', () => {
-      app.stop()
-      process.exit(0)
+    }
+    
+    process.on('SIGINT', cleanup)
+    process.on('SIGTERM', cleanup)
+    process.on('SIGUSR1', cleanup)
+    process.on('SIGUSR2', cleanup)
+    
+    // Handle uncaught exceptions
+    process.on('uncaughtException', (error) => {
+      console.error('Uncaught exception:', error)
+      cleanup()
     })
   })
 

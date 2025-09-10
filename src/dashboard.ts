@@ -14,7 +14,9 @@ export class Dashboard {
       title: 'GitHub Workflow Monitor',
       fullUnicode: true,
       autoPadding: true,
-      warnings: false
+      warnings: false,
+      keys: true,
+      mouse: true
     })
 
     // Create status bar at the bottom
@@ -45,10 +47,15 @@ export class Dashboard {
     this.screen.on('resize', () => {
       this.layoutWorkflows()
     })
+
+    // Show initial loading state and render screen
+    this.showLoadingState()
   }
 
   private setupKeyBindings(): void {
     this.screen.key(['q', 'C-c'], () => {
+      // Clean shutdown
+      this.destroy()
       process.exit(0)
     })
 
@@ -139,6 +146,35 @@ Press any key to close...`,
       this.screen.render()
     })
 
+    this.screen.render()
+  }
+
+  private showLoadingState(): void {
+    const loadingBox = blessed.box({
+      parent: this.screen,
+      top: 'center',
+      left: 'center',
+      width: '60%',
+      height: '40%',
+      content: `{center}{bold}GitHub Workflow Monitor{/bold}{/center}
+
+{center}Loading workflows...{/center}
+
+{center}Press 'q' to quit{/center}`,
+      tags: true,
+      border: {
+        type: 'line'
+      },
+      style: {
+        fg: 'white',
+        border: {
+          fg: 'cyan'
+        }
+      }
+    })
+
+    this.grid.push(loadingBox)
+    this.updateStatusBar()
     this.screen.render()
   }
 
@@ -389,6 +425,39 @@ Press any key to close...`,
 
   onOpenWorkflow(callback: (workflow: WorkflowRun) => void): void {
     this.screen.on('open-workflow', callback)
+  }
+
+  showError(message: string): void {
+    // Clear existing content
+    this.grid.forEach(box => box.destroy())
+    this.grid = []
+
+    const errorBox = blessed.box({
+      parent: this.screen,
+      top: 'center',
+      left: 'center',
+      width: '80%',
+      height: '60%',
+      content: `{center}{bold}Error Loading Workflows{/bold}{/center}
+
+{red-fg}${message}{/red-fg}
+
+{center}Press 'r' to retry or 'q' to quit{/center}`,
+      tags: true,
+      border: {
+        type: 'line'
+      },
+      style: {
+        fg: 'white',
+        border: {
+          fg: 'red'
+        }
+      }
+    })
+
+    this.grid.push(errorBox)
+    this.updateStatusBar()
+    this.screen.render()
   }
 
   destroy(): void {

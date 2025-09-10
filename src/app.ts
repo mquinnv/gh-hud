@@ -46,9 +46,7 @@ export class App {
     this.repositories = await this.configManager.buildRepositoryList(this.githubService)
     
     // Debug: Log repositories being monitored
-    if (process.env.DEBUG) {
-      console.error('Monitoring repositories:', this.repositories)
-    }
+    console.error('Monitoring repositories:', this.repositories)
     
     if (this.repositories.length === 0) {
       // Will show empty state in UI
@@ -121,7 +119,9 @@ export class App {
       // Update dashboard
       this.dashboard.updateWorkflows(workflows, this.jobs)
     } catch (error) {
-      // Silently handle errors to avoid cluttering the UI
+      // Show error in dashboard if first load fails  
+      console.error('Error in refresh():', error)
+      this.dashboard.showError(`Failed to load workflows: ${error}`)
     } finally {
       this.isRefreshing = false
     }
