@@ -9,7 +9,7 @@ export class GitHubService {
     try {
       const args = ['repo', 'list', '--json', 'name,owner', '--limit', '100']
       if (org) {
-        args.push('--org', org)
+        args.push(org)
       }
 
       const { stdout } = await execa('gh', args)
@@ -125,14 +125,9 @@ export class GitHubService {
     
     for (const repo of repos) {
       const runs = await this.listWorkflowRuns(repo)
-      // Filter for active (non-completed) runs and recently completed ones
+      // Filter for only actively running workflows (in_progress, queued, waiting)
       const activeRuns = runs.filter(run => {
-        if (run.status !== 'completed') return true
-        
-        // Show completed runs for the last 24 hours (for testing/demo purposes)
-        const completedAt = new Date(run.updatedAt)
-        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
-        return completedAt > oneDayAgo
+        return run.status === 'in_progress' || run.status === 'queued' || run.status === 'waiting'
       })
       
       allRuns.push(...activeRuns)

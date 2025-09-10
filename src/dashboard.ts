@@ -1,5 +1,4 @@
 import blessed from 'blessed'
-import { formatDistanceToNow } from 'date-fns'
 import type { WorkflowRun, WorkflowJob } from './types.js'
 
 export class Dashboard {
@@ -166,12 +165,13 @@ Press any key to close...`,
         left: 0,
         width: '100%',
         height: screenHeight,
-        content: `{center}No active workflows found{/center}
+        content: `{center}No running workflows found{/center}
 
-{center}Monitoring for workflows...{/center}
+{center}Monitoring for in-progress and queued workflows...{/center}
 {center}Press 'r' to refresh or 'q' to quit{/center}
 
-{center}To trigger a workflow, push to a repository with GitHub Actions{/center}`,
+{center}Completed workflows are automatically hidden{/center}
+{center}To see activity, trigger a workflow in your repositories{/center}`,
         tags: true,
         border: {
           type: 'line'
@@ -245,50 +245,95 @@ Press any key to close...`,
     // Header with repo and workflow name
     lines.push(`{bold}${workflow.repository.owner}/${workflow.repository.name}{/bold}`)
     lines.push(`{cyan-fg}${workflow.workflowName}{/cyan-fg}`)
+    lines.push(`Run #{yellow-fg}${workflow.runNumber}{/yellow-fg}`)
     lines.push('')
 
     // Branch and commit info
     lines.push(`Branch: {yellow-fg}${workflow.headBranch}{/yellow-fg}`)
-    if (workflow.headCommit) {
-      const message = workflow.headCommit.message.split('\n')[0]
-      const truncated = message.length > 40 ? message.substring(0, 40) + '...' : message
-      lines.push(`Commit: ${truncated}`)
+    lines.push(`Event: {magenta-fg}${workflow.event}{/magenta-fg}`)
+    if (workflow.headSha) {
+      lines.push(`SHA: {gray-fg}${workflow.headSha.substring(0, 7)}{/gray-fg}`)
     }
     lines.push('')
 
-    // Status
+    // Status with more detail
     const statusIcon = this.getStatusIcon(workflow.status, workflow.conclusion)
     const statusColor = this.getStatusColor(workflow.status, workflow.conclusion)
-    lines.push(`Status: {${statusColor}-fg}${statusIcon} ${workflow.status}{/}`)
+    lines.push(`Status: {${statusColor}-fg}${statusIcon} ${workflow.status.toUpperCase()}{/}`)
     
     if (workflow.conclusion) {
-      lines.push(`Result: {${statusColor}-fg}${workflow.conclusion}{/}`)
+      lines.push(`Result: {${statusColor}-fg}${workflow.conclusion.toUpperCase()}{/}`)
     }
 
-    // Duration
+    // Timing information
     if (workflow.startedAt) {
-      const duration = formatDistanceToNow(new Date(workflow.startedAt), { addSuffix: false })
-      lines.push(`Duration: ${duration}`)
+      const startTime = new Date(workflow.startedAt)
+      const now = new Date()
+      const duration = Math.floor((now.getTime() - startTime.getTime()) / 1000)
+      const minutes = Math.floor(duration / 60)
+      const seconds = duration % 60
+      lines.push(`Running: {white-fg}${minutes}m ${seconds}s{/white-fg}`)
+    }
+    
+    if (workflow.createdAt !== workflow.startedAt) {
+      const queueTime = new Date(workflow.startedAt || workflow.createdAt).getTime() - new Date(workflow.createdAt).getTime()
+      if (queueTime > 1000) {
+        const queueSeconds = Math.floor(queueTime / 1000)
+        lines.push(`Queue time: {gray-fg}${queueSeconds}s{/gray-fg}`)
+      }
     }
     
     lines.push('')
 
-    // Jobs
+    // Jobs with detailed step information
     if (jobs.length > 0) {
-      lines.push('{bold}Jobs:{/bold}')
+      lines.push('{bold}Jobs & Steps:{/bold}')
       jobs.forEach(job => {
         const jobIcon = this.getStatusIcon(job.status, job.conclusion)
         const jobColor = this.getStatusColor(job.status, job.conclusion)
-        lines.push(`  {${jobColor}-fg}${jobIcon}{/} ${job.name}`)
+        lines.push(`  {${jobColor}-fg}${jobIcon} ${job.name}{/}`)
         
-        // Show current step if in progress
-        if (job.status === 'in_progress' && job.steps) {
-          const currentStep = job.steps.find(s => s.status === 'in_progress')
-          if (currentStep) {
-            lines.push(`    → ${currentStep.name}`)
+        if (job.steps && job.steps.length > 0) {
+          // Show progress for running jobs
+          if (job.status === 'in_progress') {
+            const completedSteps = job.steps.filter(s => s.status === 'completed').length
+            const totalSteps = job.steps.length
+            lines.push(`    Progress: {cyan-fg}${completedSteps}/${totalSteps} steps{/cyan-fg}`)
+            
+            // Show current running step
+            const currentStep = job.steps.find(s => s.status === 'in_progress')
+            if (currentStep) {
+              lines.push(`    {yellow-fg}▶{/yellow-fg} ${currentStep.name}`)
+              if (currentStep.startedAt) {
+                const stepDuration = Math.floor((new Date().getTime() - new Date(currentStep.startedAt).getTime()) / 1000)
+                lines.push(`      Running for ${stepDuration}s`)
+              }
+            }
+            
+            // Show next few steps in queue
+            const queuedSteps = job.steps.filter(s => s.status === 'pending' || s.status === 'waiting').slice(0, 2)
+            queuedSteps.forEach(step => {
+              lines.push(`    {gray-fg}○{/gray-fg} ${step.name}`)
+            })
+          }
+          
+          // Show completion info for completed jobs
+          else if (job.status === 'completed') {
+            if (job.conclusion === 'success') {
+              lines.push(`    {green-fg}✓ All ${job.steps.length} steps completed{/green-fg}`)
+            } else if (job.conclusion === 'failure') {
+              const failedStep = job.steps.find(s => s.conclusion === 'failure')
+              if (failedStep) {
+                lines.push(`    {red-fg}✗ Failed at: ${failedStep.name}{/red-fg}`)
+              }
+            }
           }
         }
+        
+        lines.push('')
       })
+    } else {
+      lines.push('{gray-fg}Loading job details...{/gray-fg}')
     }
 
     return lines.join('\n')
@@ -332,8 +377,9 @@ Press any key to close...`,
 
   private updateStatusBar(): void {
     const now = new Date()
-    const activeCount = this.workflows.filter(w => w.status !== 'completed').length
-    const content = `Last Update: ${now.toLocaleTimeString()} | Active: ${activeCount} | Total: ${this.workflows.length} | Press 'h' for help`
+    const runningCount = this.workflows.filter(w => w.status === 'in_progress').length
+    const queuedCount = this.workflows.filter(w => w.status === 'queued' || w.status === 'waiting').length
+    const content = `Last Update: ${now.toLocaleTimeString()} | Running: ${runningCount} | Queued: ${queuedCount} | Total Active: ${this.workflows.length} | Press 'h' for help`
     this.statusBox.setContent(`{center}${content}{/center}`)
   }
 

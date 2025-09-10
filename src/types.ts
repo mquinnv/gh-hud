@@ -5,7 +5,7 @@ export interface WorkflowRun {
   headSha: string
   runNumber: number
   event: string
-  status: 'queued' | 'in_progress' | 'completed'
+  status: 'queued' | 'in_progress' | 'completed' | 'waiting'
   conclusion?: 'success' | 'failure' | 'cancelled' | 'neutral' | 'skipped' | 'timed_out' | 'action_required'
   workflowId: number
   workflowName: string
@@ -40,7 +40,7 @@ export interface WorkflowJob {
 
 export interface WorkflowStep {
   name: string
-  status: 'queued' | 'in_progress' | 'completed'
+  status: 'queued' | 'in_progress' | 'completed' | 'pending' | 'waiting'
   conclusion?: 'success' | 'failure' | 'cancelled' | 'neutral' | 'skipped'
   number: number
   startedAt?: string
