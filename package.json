@@ -15,14 +15,29 @@
     "format": "biome format --write .",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["github", "workflow", "monitoring", "cli", "terminal", "dashboard"],
+  "keywords": [
+    "github",
+    "workflow",
+    "monitoring",
+    "cli",
+    "terminal",
+    "dashboard"
+  ],
   "author": "Michael Quinn",
   "license": "MIT",
   "packageManager": "pnpm@10.12.4",
   "devDependencies": {
     "@biomejs/biome": "^2.2.3",
+    "@types/blessed": "^0.1.25",
     "@types/node": "^24.3.1",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.0",
+    "date-fns": "^4.1.0",
+    "execa": "^9.6.0"
   }
 }
