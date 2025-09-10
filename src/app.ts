@@ -45,12 +45,15 @@ export class App {
     // Build repository list
     this.repositories = await this.configManager.buildRepositoryList(this.githubService)
     
-    if (this.repositories.length === 0) {
-      console.log('No repositories found to monitor. Please configure repositories or organizations.')
-      process.exit(1)
+    // Debug: Log repositories being monitored
+    if (process.env.DEBUG) {
+      console.error('Monitoring repositories:', this.repositories)
     }
-
-    console.log(`Monitoring ${this.repositories.length} repositories...`)
+    
+    if (this.repositories.length === 0) {
+      // Will show empty state in UI
+      this.repositories = []
+    }
     
     // Set up event handlers
     this.setupEventHandlers()
@@ -85,7 +88,7 @@ export class App {
         
         await execAsync(command)
       } catch (error) {
-        console.error('Failed to open workflow in browser:', error)
+        // Silently fail
       }
     })
   }
@@ -118,7 +121,7 @@ export class App {
       // Update dashboard
       this.dashboard.updateWorkflows(workflows, this.jobs)
     } catch (error) {
-      console.error('Error refreshing workflows:', error)
+      // Silently handle errors to avoid cluttering the UI
     } finally {
       this.isRefreshing = false
     }

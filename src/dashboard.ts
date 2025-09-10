@@ -166,7 +166,12 @@ Press any key to close...`,
         left: 0,
         width: '100%',
         height: screenHeight,
-        content: '{center}No active workflows found{/center}',
+        content: `{center}No active workflows found{/center}
+
+{center}Monitoring for workflows...{/center}
+{center}Press 'r' to refresh or 'q' to quit{/center}
+
+{center}To trigger a workflow, push to a repository with GitHub Actions{/center}`,
         tags: true,
         border: {
           type: 'line'

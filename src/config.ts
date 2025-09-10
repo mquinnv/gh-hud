@@ -8,8 +8,8 @@ const DEFAULT_CONFIG: Config = {
   organizations: ['mquinnv', 'inetalliance', 'ameriglide', 'phenixcrm'],
   refreshInterval: 5000, // 5 seconds
   maxWorkflows: 20,
-  filterStatus: ['in_progress', 'queued'],
-  showCompletedFor: 5 // minutes
+  filterStatus: [], // Show all statuses by default
+  showCompletedFor: 60 // minutes - show completed for longer
 }
 
 export class ConfigManager {
@@ -28,7 +28,6 @@ export class ConfigManager {
         const content = await readFile(path, 'utf-8')
         const userConfig = JSON.parse(content)
         this.config = { ...DEFAULT_CONFIG, ...userConfig }
-        console.log(`Loaded config from ${path}`)
         break
       } catch (error) {
         // Config file doesn't exist or is invalid, continue to next

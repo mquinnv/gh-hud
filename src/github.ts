@@ -21,7 +21,7 @@ export class GitHubService {
         fullName: `${repo.owner.login}/${repo.name}`
       }))
     } catch (error) {
-      console.error('Failed to list repositories:', error)
+      // Silently fail for now, could log to file if needed
       return []
     }
   }
@@ -40,21 +40,36 @@ export class GitHubService {
         '--limit',
         limit.toString(),
         '--json',
-        'id,name,headBranch,headSha,runNumber,event,status,conclusion,workflowId,workflowName,url,htmlUrl,createdAt,updatedAt,startedAt,headCommit'
+        'databaseId,name,headBranch,headSha,number,event,status,conclusion,workflowDatabaseId,workflowName,url,createdAt,updatedAt,startedAt'
       ])
 
       const runs = JSON.parse(stdout)
       const [owner, name] = repo.split('/')
       
       const workflowRuns: WorkflowRun[] = runs.map((run: any) => ({
-        ...run,
-        repository: { owner, name }
+        id: run.databaseId || run.id,
+        name: run.name || run.displayTitle,
+        headBranch: run.headBranch,
+        headSha: run.headSha,
+        runNumber: run.number,
+        event: run.event,
+        status: run.status,
+        conclusion: run.conclusion,
+        workflowId: run.workflowDatabaseId,
+        workflowName: run.workflowName,
+        url: run.url,
+        htmlUrl: run.url, // gh doesn't provide htmlUrl, use url
+        createdAt: run.createdAt,
+        updatedAt: run.updatedAt,
+        startedAt: run.startedAt,
+        repository: { owner, name },
+        headCommit: undefined // gh run list doesn't provide commit info
       }))
 
       this.setCache(cacheKey, workflowRuns)
       return workflowRuns
     } catch (error) {
-      console.error(`Failed to list workflow runs for ${repo}:`, error)
+      // Silently fail for now, could log to file if needed
       return []
     }
   }
@@ -81,7 +96,7 @@ export class GitHubService {
       this.setCache(cacheKey, jobs)
       return jobs
     } catch (error) {
-      console.error(`Failed to get workflow jobs for ${repo} run ${runId}:`, error)
+      // Silently fail for now, could log to file if needed
       return []
     }
   }
@@ -100,7 +115,7 @@ export class GitHubService {
 
       return stdout
     } catch (error) {
-      console.error(`Failed to watch workflow run ${runId}:`, error)
+      // Silently fail for now, could log to file if needed
       return ''
     }
   }
@@ -114,10 +129,10 @@ export class GitHubService {
       const activeRuns = runs.filter(run => {
         if (run.status !== 'completed') return true
         
-        // Show completed runs for the last 5 minutes
+        // Show completed runs for the last 24 hours (for testing/demo purposes)
         const completedAt = new Date(run.updatedAt)
-        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000)
-        return completedAt > fiveMinutesAgo
+        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
+        return completedAt > oneDayAgo
       })
       
       allRuns.push(...activeRuns)
