@@ -131,14 +131,22 @@ export class Dashboard {
   private highlightSelected(): void {
     this.grid.forEach((box, index) => {
       const workflow = this.workflows[index]
-      if (workflow) {
-        const borderColor = this.getBorderColor(workflow, index === this.selectedIndex)
-        box.style.border = { fg: borderColor }
-        // Ensure black background for readability
+      if (index === this.selectedIndex) {
+        // Selected card: bright yellow border
+        box.style.border = { fg: 'yellow' }
         box.style.bg = 'black'
+        box.style.fg = 'white'
+      } else if (workflow) {
+        // Unselected workflow: status-based border color
+        const borderColor = this.getBorderColor(workflow, false)
+        box.style.border = { fg: borderColor }
+        box.style.bg = 'black'
+        box.style.fg = 'white'
       } else {
+        // Default styling
         box.style.border = { fg: '#f0f0f0' }
         box.style.bg = 'black'
+        box.style.fg = 'white'
       }
     })
     this.screen.render()
@@ -276,6 +284,7 @@ Press 'h' or 'Esc' to close...`,
         },
         style: {
           fg: 'gray',
+          bg: 'black',
           border: {
             fg: '#f0f0f0'
           }
@@ -349,6 +358,9 @@ Press 'h' or 'Esc' to close...`,
 
       this.grid.push(box)
     }
+    
+    // Ensure selection highlighting is applied after creating all boxes
+    this.highlightSelected()
   }
 
   private renderWorkflows(workflows: WorkflowRun[], jobs: Map<string, WorkflowJob[]>): void {
