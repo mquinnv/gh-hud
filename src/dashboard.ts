@@ -113,7 +113,7 @@ export class Dashboard {
   }
 
   private getBorderColor(workflow: WorkflowRun, isSelected: boolean): string {
-    if (isSelected) return 'yellow' // Selected always gets yellow border
+    if (isSelected) return 'cyan' // Selected always gets cyan border
     
     if (workflow.status === 'completed') {
       switch (workflow.conclusion) {
@@ -132,8 +132,8 @@ export class Dashboard {
     this.grid.forEach((box, index) => {
       const workflow = this.workflows[index]
       if (index === this.selectedIndex) {
-        // Selected card: bright yellow border, no background change
-        box.style.border = { fg: 'yellow' }
+        // Selected card: bright cyan border for high visibility
+        box.style.border = { fg: 'cyan' }
       } else if (workflow) {
         // Unselected workflow: status-based border color
         const borderColor = this.getBorderColor(workflow, false)
