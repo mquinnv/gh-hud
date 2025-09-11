@@ -15,6 +15,8 @@ export class App {
   private repositories: string[] = []
   private jobs: Map<string, WorkflowJob[]> = new Map()
   private isRefreshing = false
+  private watchedWorkflows: Set<number> = new Set() // Track workflows we've been watching
+  private completedWorkflows: Map<number, WorkflowRun> = new Map() // Keep completed workflows until dismissed
 
   constructor() {
     this.githubService = new GitHubService()
@@ -57,16 +59,23 @@ export class App {
     this.setupEventHandlers()
 
     // Initial fetch
-    await this.refresh()
+    await this.performRefresh(false)
 
     // Start auto-refresh
     this.startAutoRefresh()
   }
 
   private setupEventHandlers(): void {
-    // Handle manual refresh
+    // Handle manual refresh - but make sure it's only called explicitly
     this.dashboard.onRefresh(() => {
-      this.refresh()
+      // Debug: Log when refresh event is triggered
+      console.error('[DEBUG] manual-refresh event triggered')
+      this.performRefresh(true)
+    })
+
+    // Handle application exit
+    this.dashboard.onExit(() => {
+      this.stop()
     })
 
     // Handle opening workflow in browser
@@ -89,15 +98,39 @@ export class App {
         // Silently fail
       }
     })
+
+    // Handle dismissing completed workflows
+    this.dashboard.onDismissWorkflow((workflow: WorkflowRun) => {
+      this.dismissCompletedWorkflow(workflow.id)
+    })
   }
 
-  private async refresh(): Promise<void> {
+  private async performRefresh(_isManual: boolean = false): Promise<void> {
     if (this.isRefreshing) return
     this.isRefreshing = true
 
+    // Show loading in status bar instead of blocking dialog
+    this.dashboard.showLoadingInStatus()
+
     try {
-      // Fetch all active workflows
-      const workflows = await this.githubService.getAllActiveWorkflows(this.repositories)
+      // Fetch all recent workflows
+      const allRuns = await this.githubService.getAllRecentWorkflows(this.repositories)
+
+      // Update watched and completed trackers
+      for (const run of allRuns) {
+        if (run.status !== 'completed') {
+          this.watchedWorkflows.add(run.id)
+        } else if (this.watchedWorkflows.has(run.id) && !this.completedWorkflows.has(run.id)) {
+          // Transitioned to completed while being watched
+          this.completedWorkflows.set(run.id, run)
+        }
+      }
+
+      // Visible workflows = active runs + completed pending confirmation, excluding dismissed
+      const workflows = allRuns.filter(run => {
+        if (run.status !== 'completed') return true
+        return this.completedWorkflows.has(run.id)
+      })
       
       // Fetch jobs for active workflows
       const jobPromises = workflows
@@ -130,7 +163,8 @@ export class App {
   private startAutoRefresh(): void {
     const interval = this.configManager.refreshInterval
     this.refreshInterval = setInterval(() => {
-      this.refresh()
+      // Auto-refresh (don't call through manual refresh handler)
+      this.performRefresh(false)
     }, interval)
   }
 
@@ -139,6 +173,13 @@ export class App {
       clearInterval(this.refreshInterval)
       this.refreshInterval = undefined
     }
+  }
+
+  private dismissCompletedWorkflow(workflowId: number): void {
+    this.completedWorkflows.delete(workflowId)
+    this.watchedWorkflows.delete(workflowId)
+    // Trigger a refresh to update the display
+    this.performRefresh(false)
   }
 
   stop(): void {

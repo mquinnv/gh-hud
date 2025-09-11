@@ -13,7 +13,10 @@ export class Dashboard {
     this.screen = blessed.screen({
       smartCSR: true,
       title: 'GitHub Workflow Monitor',
-      fullUnicode: true
+      fullUnicode: true,
+      mouse: true,
+      sendFocus: true,
+      warnings: false
     })
 
     // Create status bar at the bottom
@@ -42,6 +45,17 @@ export class Dashboard {
       if (key) {
         console.error(`[DEBUG] Keypress: ${key.name || ch} (${key.full || 'unknown'})`)
       }
+    })
+    
+    // Debug: Log mouse events to see if they're working
+    this.screen.on('mouse', (data) => {
+      console.error(`[DEBUG] Mouse event: ${data.action} at (${data.x}, ${data.y}) button: ${data.button}`)
+    })
+    
+    // Handle screen-level mouse clicks for card selection
+    this.screen.on('click', (data) => {
+      console.error(`[DEBUG] Screen click at (${data.x}, ${data.y})`)
+      this.handleScreenClick(data.x, data.y)
     })
 
     // Set up key bindings
@@ -94,6 +108,14 @@ export class Dashboard {
       }
     })
 
+    // Dismiss completed workflow
+    this.screen.key(['d'], () => {
+      const workflow = this.workflows[this.selectedIndex]
+      if (workflow && workflow.status === 'completed') {
+        this.screen.emit('dismiss-workflow', workflow)
+      }
+    })
+
     // Show help
     this.screen.key(['h', '?'], () => {
       this.showHelp()
@@ -104,33 +126,52 @@ export class Dashboard {
     process.on('SIGTERM', () => this.cleanup())
   }
 
+  private getBorderColor(workflow: WorkflowRun, isSelected: boolean): string {
+    if (isSelected) return 'yellow' // Selected always gets yellow border
+    
+    if (workflow.status === 'completed') {
+      switch (workflow.conclusion) {
+        case 'success': return 'green'
+        case 'failure': return 'red'
+        case 'cancelled': return 'red'
+        case 'skipped': return 'gray'
+        default: return '#f0f0f0'
+      }
+    }
+    
+    return '#f0f0f0' // Default border for active workflows
+  }
+
   private highlightSelected(): void {
     this.grid.forEach((box, index) => {
-      if (index === this.selectedIndex) {
-        // Make selected card more visually prominent
-        box.style.border = { fg: 'cyan' }
-        box.style.bg = 'blue'
-        box.style.fg = 'white'
-        // Add focus styling
-        box.style.focus = {
-          border: { fg: 'yellow' },
-          bg: 'blue',
-          fg: 'white'
-        }
+      const workflow = this.workflows[index]
+      if (workflow) {
+        const borderColor = this.getBorderColor(workflow, index === this.selectedIndex)
+        box.style.border = { fg: borderColor }
       } else {
-        // Reset unselected cards to default styling
         box.style.border = { fg: '#f0f0f0' }
-        box.style.bg = 'black'
-        box.style.fg = 'white'
-        box.style.focus = {
-          border: { fg: '#f0f0f0' },
-          bg: 'black',
-          fg: 'white'
-        }
       }
     })
     console.error('[DEBUG] highlightSelected calling screen.render()')
     this.screen.render()
+  }
+
+  private handleScreenClick(x: number, y: number): void {
+    // Find which card was clicked based on coordinates
+    for (let i = 0; i < this.grid.length; i++) {
+      const box = this.grid[i]
+      const left = box.left as number
+      const top = box.top as number
+      const width = box.width as number
+      const height = box.height as number
+      
+      if (x >= left && x < left + width && y >= top && y < top + height) {
+        console.error(`[DEBUG] Clicked on card ${i}`)
+        this.selectedIndex = i
+        this.highlightSelected()
+        return
+      }
+    }
   }
 
   private showHelp(): void {
@@ -151,8 +192,14 @@ export class Dashboard {
   
 {bold}Actions:{/bold}
   r       - Force refresh
+  d       - Dismiss completed workflow
   h/?     - Show this help
   q/Ctrl+C - Quit
+  
+{bold}Mouse:{/bold}
+  Click   - Select workflow
+  Double-click - Open in browser
+  Right-click - Dismiss completed
 
 {bold}Status Colors:{/bold}
   {yellow-fg}●{/} Running
@@ -234,7 +281,7 @@ Press 'h' or 'Esc' to close...`,
 {center}Monitoring for in-progress and queued workflows...{/center}
 {center}Press 'r' to refresh or 'q' to quit{/center}
 
-{center}Completed workflows are automatically hidden{/center}
+{center}Completed workflows will be shown until dismissed{/center}
 {center}To see activity, trigger a workflow in your repositories{/center}`,
         tags: true,
         border: {
@@ -262,6 +309,8 @@ Press 'h' or 'Esc' to close...`,
     for (let i = 0; i < count; i++) {
       const row = Math.floor(i / cols)
       const col = i % cols
+      const workflow = this.workflows[i]
+      const borderColor = workflow ? this.getBorderColor(workflow, i === this.selectedIndex) : '#f0f0f0'
 
       const box = blessed.box({
         parent: this.screen,
@@ -275,14 +324,9 @@ Press 'h' or 'Esc' to close...`,
         },
         style: {
           fg: 'white',
-          bg: i === this.selectedIndex ? 'blue' : 'black',
+          bg: 'black',
           border: {
-            fg: i === this.selectedIndex ? 'cyan' : '#f0f0f0'
-          },
-          focus: {
-            border: { fg: i === this.selectedIndex ? 'yellow' : '#f0f0f0' },
-            bg: i === this.selectedIndex ? 'blue' : 'black',
-            fg: 'white'
+            fg: borderColor
           }
         },
         scrollable: true,
@@ -307,6 +351,16 @@ Press 'h' or 'Esc' to close...`,
         const workflow = this.workflows[i]
         if (workflow) {
           this.screen.emit('open-workflow', workflow)
+        }
+      })
+
+      // Add right-click event listener for dismissing completed workflows
+      box.on('rightclick', () => {
+        console.error(`[DEBUG] Card ${i} right-clicked`)
+        const workflow = this.workflows[i]
+        if (workflow && workflow.status === 'completed') {
+          console.error(`[DEBUG] Dismissing completed workflow ${workflow.id}`)
+          this.screen.emit('dismiss-workflow', workflow)
         }
       })
 
@@ -354,6 +408,11 @@ Press 'h' or 'Esc' to close...`,
     
     if (workflow.conclusion) {
       lines.push(`Result: {${statusColor}-fg}${workflow.conclusion.toUpperCase()}{/}`)
+    }
+
+    // Show dismiss hint for completed workflows
+    if (workflow.status === 'completed') {
+      lines.push(`{gray-fg}Right-click or 'd' to dismiss{/gray-fg}`)
     }
 
     // Timing information
@@ -543,7 +602,14 @@ Press 'h' or 'Esc' to close...`,
     const now = new Date()
     const runningCount = this.workflows.filter(w => w.status === 'in_progress').length
     const queuedCount = this.workflows.filter(w => w.status === 'queued' || w.status === 'waiting').length
-    const content = `Last Update: ${now.toLocaleTimeString()} | Running: ${runningCount} | Queued: ${queuedCount} | Total Active: ${this.workflows.length} | Press 'h' for help`
+    const completedCount = this.workflows.filter(w => w.status === 'completed').length
+    
+    let content = `Last Update: ${now.toLocaleTimeString()} | Running: ${runningCount} | Queued: ${queuedCount}`
+    if (completedCount > 0) {
+      content += ` | Completed: ${completedCount} (awaiting dismissal)`
+    }
+    content += ` | Total: ${this.workflows.length} | Press 'h' for help`
+    
     this.statusBox.setContent(`{center}${content}{/center}`)
   }
 
@@ -553,6 +619,10 @@ Press 'h' or 'Esc' to close...`,
 
   onOpenWorkflow(callback: (workflow: WorkflowRun) => void): void {
     this.screen.on('open-workflow', callback)
+  }
+
+  onDismissWorkflow(callback: (workflow: WorkflowRun) => void): void {
+    this.screen.on('dismiss-workflow', callback)
   }
 
   showError(message: string): void {

@@ -128,17 +128,13 @@ export class GitHubService {
     }
   }
 
-  async getAllActiveWorkflows(repos: string[]): Promise<WorkflowRun[]> {
+  async getAllRecentWorkflows(repos: string[]): Promise<WorkflowRun[]> {
     const allRuns: WorkflowRun[] = []
     
     for (const repo of repos) {
       const runs = await this.listWorkflowRuns(repo)
-      // Filter for only actively running workflows (in_progress, queued, waiting)
-      const activeRuns = runs.filter(run => {
-        return run.status === 'in_progress' || run.status === 'queued' || run.status === 'waiting'
-      })
-      
-      allRuns.push(...activeRuns)
+      // Return all recent workflows, let the App class decide which ones to show
+      allRuns.push(...runs)
     }
 
     // Sort by most recently updated
