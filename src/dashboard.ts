@@ -329,6 +329,9 @@ Press 'h' or 'Esc' to close...`,
 
   private formatWorkflowContent(workflow: WorkflowRun, jobs: WorkflowJob[]): string {
     const lines: string[] = []
+    
+    // Determine if we should show all steps based on number of workflows
+    const showAllSteps = this.workflows.length <= 2
 
     // Header with repo and workflow name
     lines.push(`{bold}${workflow.repository.owner}/${workflow.repository.name}{/bold}`)
@@ -391,9 +394,19 @@ Press 'h' or 'Esc' to close...`,
             lines.push(`    Progress: {cyan-fg}${completedSteps}/${totalSteps} steps{/cyan-fg}`)
             
             if (currentStepIndex >= 0) {
-              // Show 2-3 recently completed steps before current
-              const startIndex = Math.max(0, currentStepIndex - 2)
-              const endIndex = Math.min(job.steps.length, currentStepIndex + 4)
+              // Determine how many steps to show based on available space
+              let startIndex: number
+              let endIndex: number
+              
+              if (showAllSteps) {
+                // Show all steps when there are few workflows
+                startIndex = 0
+                endIndex = job.steps.length
+              } else {
+                // Show 2-3 recently completed steps before current (existing behavior)
+                startIndex = Math.max(0, currentStepIndex - 2)
+                endIndex = Math.min(job.steps.length, currentStepIndex + 4)
+              }
               
               for (let i = startIndex; i < endIndex; i++) {
                 const step = job.steps[i]
@@ -426,8 +439,8 @@ Press 'h' or 'Esc' to close...`,
                 }
               }
               
-              // Show if there are more steps after what we're displaying
-              if (endIndex < job.steps.length) {
+              // Show if there are more steps after what we're displaying (only when not showing all)
+              if (!showAllSteps && endIndex < job.steps.length) {
                 const remainingSteps = job.steps.length - endIndex
                 lines.push(`    {gray-fg}... and ${remainingSteps} more step${remainingSteps > 1 ? 's' : ''}{/}`)
               }
@@ -436,13 +449,47 @@ Press 'h' or 'Esc' to close...`,
           
           // Show completion info for completed jobs
           else if (job.status === 'completed') {
-            if (job.conclusion === 'success') {
-              lines.push(`    {green-fg}✓ All ${job.steps.length} steps completed{/green-fg}`)
-            } else if (job.conclusion === 'failure') {
-              const failedStep = job.steps.find(s => s.conclusion === 'failure')
-              if (failedStep) {
-                lines.push(`    {red-fg}✗ Failed at: ${failedStep.name}{/red-fg}`)
+            if (showAllSteps && job.steps && job.steps.length > 0) {
+              // Show all completed steps with details when there's room
+              job.steps.forEach((step, index) => {
+                const stepNumber = `${index + 1}/${job.steps!.length}`
+                const stepIcon = step.conclusion === 'success' ? '✓' : 
+                                 step.conclusion === 'failure' ? '✗' : 
+                                 step.conclusion === 'skipped' ? '⊜' : '○'
+                const stepColor = step.conclusion === 'success' ? 'green' : 
+                                  step.conclusion === 'failure' ? 'red' : 'gray'
+                
+                let duration = ''
+                if (step.startedAt && step.completedAt) {
+                  const dur = Math.floor((new Date(step.completedAt).getTime() - new Date(step.startedAt).getTime()) / 1000)
+                  duration = ` (${dur}s)`
+                }
+                
+                lines.push(`    {${stepColor}-fg}${stepIcon}{/} {gray-fg}${stepNumber}{/} ${step.name}{gray-fg}${duration}{/}`)
+              })
+            } else {
+              // Show summary when there's limited space (existing behavior)
+              if (job.conclusion === 'success') {
+                lines.push(`    {green-fg}✓ All ${job.steps.length} steps completed{/green-fg}`)
+              } else if (job.conclusion === 'failure') {
+                const failedStep = job.steps.find(s => s.conclusion === 'failure')
+                if (failedStep) {
+                  lines.push(`    {red-fg}✗ Failed at: ${failedStep.name}{/red-fg}`)
+                }
               }
+            }
+          }
+          
+          // Show queued job steps when there's room
+          else if (showAllSteps && (job.status === 'queued' || job.status === 'waiting')) {
+            if (job.steps && job.steps.length > 0) {
+              lines.push(`    {gray-fg}Queued - ${job.steps.length} steps pending{/gray-fg}`)
+              job.steps.forEach((step, index) => {
+                const stepNumber = `${index + 1}/${job.steps!.length}`
+                lines.push(`    {gray-fg}○ ${stepNumber} ${step.name}{/gray-fg}`)
+              })
+            } else {
+              lines.push(`    {gray-fg}Waiting to start...{/gray-fg}`)
             }
           }
         }
