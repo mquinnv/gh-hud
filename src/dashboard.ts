@@ -8,6 +8,9 @@ export class Dashboard {
   private selectedIndex = 0
   private workflows: WorkflowRun[] = []
   private isModalOpen = false
+  private currentBoxWidth = 80
+  private cols = 1 // Number of columns in the grid
+  private rows = 1 // Number of rows in the grid
 
   constructor() {
     this.screen = blessed.screen({
@@ -16,7 +19,11 @@ export class Dashboard {
       fullUnicode: true,
       mouse: true,
       sendFocus: true,
-      warnings: false
+      warnings: false,
+      keys: true,
+      vi: false,
+      input: process.stdin,
+      output: process.stdout
     })
 
     // Create status bar at the bottom
@@ -45,8 +52,31 @@ export class Dashboard {
       this.handleScreenClick(data.x, data.y)
     })
 
+
     // Set up key bindings
     this.setupKeyBindings()
+    
+    // Manual key handling as fallback for problematic keys
+    this.screen.on('keypress', (_ch, key) => {
+      if (!key) return
+      
+      // Manual key handling for uppercase D as fallback
+      if (key.name === 'd' && key.shift && !key.ctrl && !key.meta) {
+        const completedWorkflows = this.workflows.filter(w => w.status === 'completed')
+        if (completedWorkflows.length > 0) {
+          this.screen.emit('dismiss-all-completed', completedWorkflows)
+        }
+        return // Prevent further processing
+      }
+      
+      // Handle lowercase d manually as additional backup
+      if (key.name === 'd' && !key.shift && !key.ctrl && !key.meta) {
+        const workflow = this.workflows[this.selectedIndex]
+        if (workflow && workflow.status === 'completed') {
+          this.screen.emit('dismiss-workflow', workflow)
+        }
+      }
+    })
 
     // Handle resize
     this.screen.on('resize', () => {
@@ -58,9 +88,16 @@ export class Dashboard {
     
     // Ensure screen can receive key events and render
     this.screen.render()
+    
+    // Make sure we're listening for the right key events
+    this.screen.program.input.setEncoding('utf8')
+    this.screen.program.input.resume()
   }
 
   private setupKeyBindings(): void {
+    // Make sure the screen is focused and can receive key events
+    // Note: blessed screens don't have a focus() method
+    
     // Handle quit commands with proper cleanup
     this.screen.key(['q', 'C-c'], () => {
       this.cleanup()
@@ -71,19 +108,22 @@ export class Dashboard {
       this.screen.emit('manual-refresh')
     })
 
-    // Navigation keys
-    this.screen.key(['up', 'k'], () => {
-      if (this.selectedIndex > 0) {
-        this.selectedIndex--
-        this.highlightSelected()
-      }
+    // 2D Grid Navigation keys
+    this.screen.key(['up', 'k', 'C-p'], () => {
+      this.navigateGrid('up')
     })
 
-    this.screen.key(['down', 'j'], () => {
-      if (this.selectedIndex < this.workflows.length - 1) {
-        this.selectedIndex++
-        this.highlightSelected()
-      }
+    this.screen.key(['down', 'j', 'C-n'], () => {
+      this.navigateGrid('down')
+    })
+
+    // Left/right navigation
+    this.screen.key(['left'], () => {
+      this.navigateGrid('left')
+    })
+
+    this.screen.key(['right'], () => {
+      this.navigateGrid('right')
     })
 
     // Open workflow in browser
@@ -102,6 +142,19 @@ export class Dashboard {
       }
     })
 
+    // Dismiss ALL completed workflows - comprehensive key handling
+    const dismissAllHandler = () => {
+      const completedWorkflows = this.workflows.filter(w => w.status === 'completed')
+      if (completedWorkflows.length > 0) {
+        this.screen.emit('dismiss-all-completed', completedWorkflows)
+      }
+    }
+    
+    // Try multiple key binding approaches
+    this.screen.key(['D'], dismissAllHandler)
+    this.screen.key(['S-d'], dismissAllHandler)
+    this.screen.key(['shift+d'], dismissAllHandler)
+
     // Show help
     this.screen.key(['h', '?'], () => {
       this.showHelp()
@@ -110,6 +163,78 @@ export class Dashboard {
     // Also handle process signals for clean shutdown
     process.on('SIGINT', () => this.cleanup())
     process.on('SIGTERM', () => this.cleanup())
+  }
+
+  // Convert linear array index to 2D grid coordinates
+  private indexToCoords(index: number): { row: number, col: number } {
+    return {
+      row: Math.floor(index / this.cols),
+      col: index % this.cols
+    }
+  }
+
+  // Convert 2D grid coordinates to linear array index
+  private coordsToIndex(row: number, col: number): number {
+    return row * this.cols + col
+  }
+
+  // Check if a grid position is valid (within bounds and has a workflow)
+  private isValidGridPosition(row: number, col: number): boolean {
+    if (row < 0 || row >= this.rows || col < 0 || col >= this.cols) {
+      return false
+    }
+    const index = this.coordsToIndex(row, col)
+    return index >= 0 && index < this.workflows.length
+  }
+
+  // Navigate the 2D grid spatially
+  private navigateGrid(direction: 'up' | 'down' | 'left' | 'right'): void {
+    if (this.workflows.length === 0) return
+
+    const currentCoords = this.indexToCoords(this.selectedIndex)
+    let newRow = currentCoords.row
+    let newCol = currentCoords.col
+
+    switch (direction) {
+      case 'up':
+        newRow = currentCoords.row - 1
+        // If at top row, don't wrap - stay in place
+        if (newRow < 0) {
+          return
+        }
+        break
+
+      case 'down':
+        newRow = currentCoords.row + 1
+        // If at bottom row, don't wrap - stay in place
+        if (newRow >= this.rows) {
+          return
+        }
+        break
+
+      case 'left':
+        newCol = currentCoords.col - 1
+        // If at leftmost column, don't wrap - stay in place
+        if (newCol < 0) {
+          return
+        }
+        break
+
+      case 'right':
+        newCol = currentCoords.col + 1
+        // If at rightmost column, don't wrap - stay in place
+        if (newCol >= this.cols) {
+          return
+        }
+        break
+    }
+
+    // Check if the new position is valid (has a workflow)
+    if (this.isValidGridPosition(newRow, newCol)) {
+      this.selectedIndex = this.coordsToIndex(newRow, newCol)
+      this.highlightSelected()
+    }
+    // If invalid position (like last row with fewer items), don't move
   }
 
   private getBorderColor(workflow: WorkflowRun, isSelected: boolean): string {
@@ -175,13 +300,15 @@ export class Dashboard {
 {center}{bold}GitHub Workflow Monitor - Help{/bold}{/center}
 
 {bold}Navigation:{/bold}
-  ↑/k     - Move selection up
-  ↓/j     - Move selection down
+  ↑/k     - Move up in grid
+  ↓/j     - Move down in grid
+  ←/→     - Move left/right in grid
   Enter   - Open workflow in browser
   
 {bold}Actions:{/bold}
   r       - Force refresh
   d       - Dismiss completed workflow
+  D       - Dismiss ALL completed workflows
   h/?     - Show this help
   q/Ctrl+C - Quit
   
@@ -287,17 +414,20 @@ Press 'h' or 'Esc' to close...`,
       return
     }
 
-    // Calculate grid layout
-    const cols = Math.min(Math.ceil(Math.sqrt(count)), 3)
-    const rows = Math.ceil(count / cols)
+    // Calculate grid layout - use full width for single card
+    this.cols = count === 1 ? 1 : Math.min(Math.ceil(Math.sqrt(count)), 3)
+    this.rows = Math.ceil(count / this.cols)
     
-    const boxWidth = Math.floor(screenWidth / cols)
-    const boxHeight = Math.floor(screenHeight / rows)
+    const boxWidth = Math.floor(screenWidth / this.cols)
+    const boxHeight = Math.floor(screenHeight / this.rows)
+    
+    // Store box width for use in formatting
+    this.currentBoxWidth = boxWidth
 
     // Create grid of boxes
     for (let i = 0; i < count; i++) {
-      const row = Math.floor(i / cols)
-      const col = i % cols
+      const row = Math.floor(i / this.cols)
+      const col = i % this.cols
       const workflow = this.workflows[i]
       const borderColor = workflow ? this.getBorderColor(workflow, i === this.selectedIndex) : '#f0f0f0'
 
@@ -360,7 +490,8 @@ Press 'h' or 'Esc' to close...`,
       if (index >= this.grid.length) return
 
       const box = this.grid[index]
-      const content = this.formatWorkflowContent(workflow, jobs.get(`${workflow.id}`) || [])
+      const isSelected = index === this.selectedIndex
+      const content = this.formatWorkflowContent(workflow, jobs.get(`${workflow.id}`) || [], isSelected)
       box.setContent(content)
     })
 
@@ -368,16 +499,29 @@ Press 'h' or 'Esc' to close...`,
     this.screen.render()
   }
 
-  private formatWorkflowContent(workflow: WorkflowRun, jobs: WorkflowJob[]): string {
+  private formatWorkflowContent(workflow: WorkflowRun, jobs: WorkflowJob[], isSelected: boolean = false): string {
     const lines: string[] = []
     
     // Determine if we should show all steps based on number of workflows
     const showAllSteps = this.workflows.length <= 2
 
-    // Header with repo and workflow name
-    lines.push(`{bold}${workflow.repository.owner}/${workflow.repository.name}{/bold}`)
-    lines.push(`{cyan-fg}${workflow.workflowName}{/cyan-fg}`)
-    lines.push(`Run #{yellow-fg}${workflow.runNumber}{/yellow-fg}`)
+    // Header with repo and workflow name - full width inverse bar if selected
+    if (isSelected) {
+      // Create full-width inverted header block
+      const repoLine = ` ${workflow.repository.owner}/${workflow.repository.name}`
+      const workflowLine = ` ${workflow.workflowName}`
+      const runLine = ` Run #${workflow.runNumber}`
+      
+      // Pad to actual card width minus border (2 chars) and some margin
+      const padWidth = Math.max(30, this.currentBoxWidth - 4)
+      lines.push(`{inverse}${repoLine.padEnd(padWidth)}{/inverse}`)
+      lines.push(`{inverse}{cyan-fg}${workflowLine.padEnd(padWidth)}{/cyan-fg}{/inverse}`)
+      lines.push(`{inverse}{yellow-fg}${runLine.padEnd(padWidth)}{/yellow-fg}{/inverse}`)
+    } else {
+      lines.push(`{bold}${workflow.repository.owner}/${workflow.repository.name}{/bold}`)
+      lines.push(`{cyan-fg}${workflow.workflowName}{/cyan-fg}`)
+      lines.push(`Run #{yellow-fg}${workflow.runNumber}{/yellow-fg}`)
+    }
     lines.push('')
 
     // Branch and commit info
@@ -610,6 +754,10 @@ Press 'h' or 'Esc' to close...`,
 
   onDismissWorkflow(callback: (workflow: WorkflowRun) => void): void {
     this.screen.on('dismiss-workflow', callback)
+  }
+
+  onDismissAllCompleted(callback: (workflows: WorkflowRun[]) => void): void {
+    this.screen.on('dismiss-all-completed', callback)
   }
 
   showError(message: string): void {

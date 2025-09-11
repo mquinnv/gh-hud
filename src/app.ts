@@ -96,7 +96,14 @@ export class App {
 
     // Handle dismissing completed workflows
     this.dashboard.onDismissWorkflow((workflow: WorkflowRun) => {
+      console.log('DEBUG: dismiss-workflow event received for:', workflow.repository.name)
       this.dismissCompletedWorkflow(workflow.id)
+    })
+
+    // Handle dismissing all completed workflows
+    this.dashboard.onDismissAllCompleted((workflows: WorkflowRun[]) => {
+      console.log('DEBUG: dismiss-all-completed event received for', workflows.length, 'workflows')
+      this.dismissAllCompletedWorkflows(workflows)
     })
   }
 
@@ -171,8 +178,20 @@ export class App {
   }
 
   private dismissCompletedWorkflow(workflowId: number): void {
+    console.log('DEBUG: dismissCompletedWorkflow called for workflow ID:', workflowId)
     this.completedWorkflows.delete(workflowId)
     this.watchedWorkflows.delete(workflowId)
+    // Trigger a refresh to update the display
+    this.performRefresh(false)
+  }
+
+  private dismissAllCompletedWorkflows(workflows: WorkflowRun[]): void {
+    console.log('DEBUG: dismissAllCompletedWorkflows called for', workflows.length, 'workflows')
+    // Remove all completed workflows from tracking
+    workflows.forEach(workflow => {
+      this.completedWorkflows.delete(workflow.id)
+      this.watchedWorkflows.delete(workflow.id)
+    })
     // Trigger a refresh to update the display
     this.performRefresh(false)
   }
