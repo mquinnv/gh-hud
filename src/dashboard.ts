@@ -375,6 +375,10 @@ Press 'h' or 'Esc' to close...`,
     this.renderWorkflows(workflows, jobs)
   }
 
+  getCurrentWorkflows(): WorkflowRun[] {
+    return this.workflows
+  }
+
   private layoutWorkflows(): void {
     // Clear existing workflow boxes
     this.grid.forEach(box => box.destroy())

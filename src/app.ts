@@ -96,13 +96,11 @@ export class App {
 
     // Handle dismissing completed workflows
     this.dashboard.onDismissWorkflow((workflow: WorkflowRun) => {
-      console.log('DEBUG: dismiss-workflow event received for:', workflow.repository.name)
       this.dismissCompletedWorkflow(workflow.id)
     })
 
     // Handle dismissing all completed workflows
     this.dashboard.onDismissAllCompleted((workflows: WorkflowRun[]) => {
-      console.log('DEBUG: dismiss-all-completed event received for', workflows.length, 'workflows')
       this.dismissAllCompletedWorkflows(workflows)
     })
   }
@@ -178,22 +176,33 @@ export class App {
   }
 
   private dismissCompletedWorkflow(workflowId: number): void {
-    console.log('DEBUG: dismissCompletedWorkflow called for workflow ID:', workflowId)
     this.completedWorkflows.delete(workflowId)
     this.watchedWorkflows.delete(workflowId)
-    // Trigger a refresh to update the display
-    this.performRefresh(false)
+    // Update display immediately without API refresh
+    this.updateDisplayAfterDismiss()
   }
 
   private dismissAllCompletedWorkflows(workflows: WorkflowRun[]): void {
-    console.log('DEBUG: dismissAllCompletedWorkflows called for', workflows.length, 'workflows')
     // Remove all completed workflows from tracking
     workflows.forEach(workflow => {
       this.completedWorkflows.delete(workflow.id)
       this.watchedWorkflows.delete(workflow.id)
     })
-    // Trigger a refresh to update the display
-    this.performRefresh(false)
+    // Update display immediately without API refresh
+    this.updateDisplayAfterDismiss()
+  }
+
+  private updateDisplayAfterDismiss(): void {
+    // Get the last known workflows from the dashboard and filter out dismissed ones
+    // This avoids an expensive API call just to update the display
+    const currentWorkflows = this.dashboard.getCurrentWorkflows()
+    const filteredWorkflows = currentWorkflows.filter(run => {
+      if (run.status !== 'completed') return true
+      return this.completedWorkflows.has(run.id)
+    })
+    
+    // Update dashboard with filtered workflows immediately
+    this.dashboard.updateWorkflows(filteredWorkflows, this.jobs)
   }
 
   stop(): void {
