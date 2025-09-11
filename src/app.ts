@@ -47,9 +47,6 @@ export class App {
     // Build repository list
     this.repositories = await this.configManager.buildRepositoryList(this.githubService)
     
-    // Debug: Log repositories being monitored
-    console.error('Monitoring repositories:', this.repositories)
-    
     if (this.repositories.length === 0) {
       // Will show empty state in UI
       this.repositories = []
@@ -68,8 +65,6 @@ export class App {
   private setupEventHandlers(): void {
     // Handle manual refresh - but make sure it's only called explicitly
     this.dashboard.onRefresh(() => {
-      // Debug: Log when refresh event is triggered
-      console.error('[DEBUG] manual-refresh event triggered')
       this.performRefresh(true)
     })
 

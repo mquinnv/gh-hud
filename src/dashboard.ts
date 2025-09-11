@@ -40,21 +40,8 @@ export class Dashboard {
 
     this.screen.append(this.statusBox)
 
-    // Debug: Log all events to see what's happening
-    this.screen.on('keypress', (ch, key) => {
-      if (key) {
-        console.error(`[DEBUG] Keypress: ${key.name || ch} (${key.full || 'unknown'})`)
-      }
-    })
-    
-    // Debug: Log mouse events to see if they're working
-    this.screen.on('mouse', (data) => {
-      console.error(`[DEBUG] Mouse event: ${data.action} at (${data.x}, ${data.y}) button: ${data.button}`)
-    })
-    
     // Handle screen-level mouse clicks for card selection
     this.screen.on('click', (data) => {
-      console.error(`[DEBUG] Screen click at (${data.x}, ${data.y})`)
       this.handleScreenClick(data.x, data.y)
     })
 
@@ -81,7 +68,6 @@ export class Dashboard {
 
     // Handle manual refresh
     this.screen.key(['r'], () => {
-      console.error('[DEBUG] R key pressed - emitting manual-refresh')
       this.screen.emit('manual-refresh')
     })
 
@@ -155,7 +141,6 @@ export class Dashboard {
         box.style.bg = 'black'
       }
     })
-    console.error('[DEBUG] highlightSelected calling screen.render()')
     this.screen.render()
   }
 
@@ -169,7 +154,6 @@ export class Dashboard {
       const height = box.height as number
       
       if (x >= left && x < left + width && y >= top && y < top + height) {
-        console.error(`[DEBUG] Clicked on card ${i}`)
         this.selectedIndex = i
         this.highlightSelected()
         return
@@ -341,14 +325,12 @@ Press 'h' or 'Esc' to close...`,
 
       // Add mouse click event listener for selection
       box.on('click', () => {
-        console.error(`[DEBUG] Card ${i} clicked - updating selection`)
         this.selectedIndex = i
         this.highlightSelected()
       })
 
       // Add double-click event listener for opening workflow
       box.on('dblclick', () => {
-        console.error(`[DEBUG] Card ${i} double-clicked - opening workflow`)
         this.selectedIndex = i
         this.highlightSelected()
         const workflow = this.workflows[i]
@@ -359,10 +341,8 @@ Press 'h' or 'Esc' to close...`,
 
       // Add right-click event listener for dismissing completed workflows
       box.on('rightclick', () => {
-        console.error(`[DEBUG] Card ${i} right-clicked`)
         const workflow = this.workflows[i]
         if (workflow && workflow.status === 'completed') {
-          console.error(`[DEBUG] Dismissing completed workflow ${workflow.id}`)
           this.screen.emit('dismiss-workflow', workflow)
         }
       })
