@@ -148,8 +148,11 @@ export class Dashboard {
       if (workflow) {
         const borderColor = this.getBorderColor(workflow, index === this.selectedIndex)
         box.style.border = { fg: borderColor }
+        // Ensure black background for readability
+        box.style.bg = 'black'
       } else {
         box.style.border = { fg: '#f0f0f0' }
+        box.style.bg = 'black'
       }
     })
     console.error('[DEBUG] highlightSelected calling screen.render()')
