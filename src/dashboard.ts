@@ -7,16 +7,13 @@ export class Dashboard {
   private statusBox: blessed.Widgets.BoxElement
   private selectedIndex = 0
   private workflows: WorkflowRun[] = []
+  private isModalOpen = false
 
   constructor() {
     this.screen = blessed.screen({
       smartCSR: true,
       title: 'GitHub Workflow Monitor',
-      fullUnicode: true,
-      autoPadding: true,
-      warnings: false,
-      keys: true,
-      mouse: true
+      fullUnicode: true
     })
 
     // Create status bar at the bottom
@@ -40,6 +37,13 @@ export class Dashboard {
 
     this.screen.append(this.statusBox)
 
+    // Debug: Log all events to see what's happening
+    this.screen.on('keypress', (ch, key) => {
+      if (key) {
+        console.error(`[DEBUG] Keypress: ${key.name || ch} (${key.full || 'unknown'})`)
+      }
+    })
+
     // Set up key bindings
     this.setupKeyBindings()
 
@@ -48,21 +52,26 @@ export class Dashboard {
       this.layoutWorkflows()
     })
 
-    // Show initial loading state and render screen
-    this.showLoadingState()
+    // Show initial status (no loading dialog)
+    this.showInitialState()
+    
+    // Ensure screen can receive key events and render
+    this.screen.render()
   }
 
   private setupKeyBindings(): void {
+    // Handle quit commands with proper cleanup
     this.screen.key(['q', 'C-c'], () => {
-      // Clean shutdown
-      this.destroy()
-      process.exit(0)
+      this.cleanup()
     })
 
+    // Handle manual refresh
     this.screen.key(['r'], () => {
-      this.screen.emit('refresh')
+      console.error('[DEBUG] R key pressed - emitting manual-refresh')
+      this.screen.emit('manual-refresh')
     })
 
+    // Navigation keys
     this.screen.key(['up', 'k'], () => {
       if (this.selectedIndex > 0) {
         this.selectedIndex--
@@ -77,6 +86,7 @@ export class Dashboard {
       }
     })
 
+    // Open workflow in browser
     this.screen.key(['enter'], () => {
       const workflow = this.workflows[this.selectedIndex]
       if (workflow) {
@@ -84,23 +94,47 @@ export class Dashboard {
       }
     })
 
+    // Show help
     this.screen.key(['h', '?'], () => {
       this.showHelp()
     })
+
+    // Also handle process signals for clean shutdown
+    process.on('SIGINT', () => this.cleanup())
+    process.on('SIGTERM', () => this.cleanup())
   }
 
   private highlightSelected(): void {
     this.grid.forEach((box, index) => {
       if (index === this.selectedIndex) {
+        // Make selected card more visually prominent
         box.style.border = { fg: 'cyan' }
+        box.style.bg = 'blue'
+        box.style.fg = 'white'
+        // Add focus styling
+        box.style.focus = {
+          border: { fg: 'yellow' },
+          bg: 'blue',
+          fg: 'white'
+        }
       } else {
+        // Reset unselected cards to default styling
         box.style.border = { fg: '#f0f0f0' }
+        box.style.bg = 'black'
+        box.style.fg = 'white'
+        box.style.focus = {
+          border: { fg: '#f0f0f0' },
+          bg: 'black',
+          fg: 'white'
+        }
       }
     })
+    console.error('[DEBUG] highlightSelected calling screen.render()')
     this.screen.render()
   }
 
   private showHelp(): void {
+    this.isModalOpen = true
     const helpBox = blessed.box({
       parent: this.screen,
       top: 'center',
@@ -126,7 +160,7 @@ export class Dashboard {
   {red-fg}●{/} Failed
   {gray-fg}●{/} Queued
 
-Press any key to close...`,
+Press 'h' or 'Esc' to close...`,
       tags: true,
       border: {
         type: 'line'
@@ -137,48 +171,42 @@ Press any key to close...`,
         border: {
           fg: 'cyan'
         }
-      }
+      },
+      keys: true,
+      mouse: true,
+      input: true
     })
 
     helpBox.focus()
-    helpBox.key(['escape', 'q', 'h'], () => {
+    
+    // Close help on any key press
+    const closeHelp = () => {
+      this.isModalOpen = false
       helpBox.destroy()
       this.screen.render()
-    })
+    }
+    
+    // Listen for specific keys to close the help
+    helpBox.key(['h', 'escape'], closeHelp)
 
     this.screen.render()
   }
 
-  private showLoadingState(): void {
-    const loadingBox = blessed.box({
-      parent: this.screen,
-      top: 'center',
-      left: 'center',
-      width: '60%',
-      height: '40%',
-      content: `{center}{bold}GitHub Workflow Monitor{/bold}{/center}
-
-{center}Loading workflows...{/center}
-
-{center}Press 'q' to quit{/center}`,
-      tags: true,
-      border: {
-        type: 'line'
-      },
-      style: {
-        fg: 'white',
-        border: {
-          fg: 'cyan'
-        }
-      }
-    })
-
-    this.grid.push(loadingBox)
-    this.updateStatusBar()
+  private showInitialState(): void {
+    // Just show the status bar with loading message - no intrusive dialog
+    this.statusBox.setContent('{center}Loading workflows... Press \'q\' to quit{/center}')
     this.screen.render()
   }
+
 
   updateWorkflows(workflows: WorkflowRun[], jobs: Map<string, WorkflowJob[]>): void {
+    // Don't update the display if a modal dialog is open
+    if (this.isModalOpen) {
+      // Still update the data but don't re-render the screen
+      this.workflows = workflows
+      return
+    }
+    
     this.workflows = workflows
     this.layoutWorkflows()
     this.renderWorkflows(workflows, jobs)
@@ -247,8 +275,14 @@ Press any key to close...`,
         },
         style: {
           fg: 'white',
+          bg: i === this.selectedIndex ? 'blue' : 'black',
           border: {
             fg: i === this.selectedIndex ? 'cyan' : '#f0f0f0'
+          },
+          focus: {
+            border: { fg: i === this.selectedIndex ? 'yellow' : '#f0f0f0' },
+            bg: i === this.selectedIndex ? 'blue' : 'black',
+            fg: 'white'
           }
         },
         scrollable: true,
@@ -256,6 +290,24 @@ Press any key to close...`,
         mouse: true,
         keys: true,
         vi: true
+      })
+
+      // Add mouse click event listener for selection
+      box.on('click', () => {
+        console.error(`[DEBUG] Card ${i} clicked - updating selection`)
+        this.selectedIndex = i
+        this.highlightSelected()
+      })
+
+      // Add double-click event listener for opening workflow
+      box.on('dblclick', () => {
+        console.error(`[DEBUG] Card ${i} double-clicked - opening workflow`)
+        this.selectedIndex = i
+        this.highlightSelected()
+        const workflow = this.workflows[i]
+        if (workflow) {
+          this.screen.emit('open-workflow', workflow)
+        }
       })
 
       this.grid.push(box)
@@ -334,23 +386,52 @@ Press any key to close...`,
           if (job.status === 'in_progress') {
             const completedSteps = job.steps.filter(s => s.status === 'completed').length
             const totalSteps = job.steps.length
+            const currentStepIndex = job.steps.findIndex(s => s.status === 'in_progress')
+            
             lines.push(`    Progress: {cyan-fg}${completedSteps}/${totalSteps} steps{/cyan-fg}`)
             
-            // Show current running step
-            const currentStep = job.steps.find(s => s.status === 'in_progress')
-            if (currentStep) {
-              lines.push(`    {yellow-fg}▶{/yellow-fg} ${currentStep.name}`)
-              if (currentStep.startedAt) {
-                const stepDuration = Math.floor((new Date().getTime() - new Date(currentStep.startedAt).getTime()) / 1000)
-                lines.push(`      Running for ${stepDuration}s`)
+            if (currentStepIndex >= 0) {
+              // Show 2-3 recently completed steps before current
+              const startIndex = Math.max(0, currentStepIndex - 2)
+              const endIndex = Math.min(job.steps.length, currentStepIndex + 4)
+              
+              for (let i = startIndex; i < endIndex; i++) {
+                const step = job.steps[i]
+                const stepNumber = `${i + 1}/${totalSteps}`
+                
+                if (step.status === 'completed') {
+                  const stepIcon = step.conclusion === 'success' ? '✓' : 
+                                   step.conclusion === 'failure' ? '✗' : 
+                                   step.conclusion === 'skipped' ? '⊜' : '○'
+                  const stepColor = step.conclusion === 'success' ? 'green' : 
+                                    step.conclusion === 'failure' ? 'red' : 'gray'
+                  
+                  let duration = ''
+                  if (step.startedAt && step.completedAt) {
+                    const dur = Math.floor((new Date(step.completedAt).getTime() - new Date(step.startedAt).getTime()) / 1000)
+                    duration = ` (${dur}s)`
+                  }
+                  
+                  lines.push(`    {${stepColor}-fg}${stepIcon}{/} {gray-fg}${stepNumber}{/} ${step.name}{gray-fg}${duration}{/}`)
+                } else if (step.status === 'in_progress') {
+                  // Current running step - highlighted
+                  const stepDuration = step.startedAt ? 
+                    Math.floor((new Date().getTime() - new Date(step.startedAt).getTime()) / 1000) : 0
+                  
+                  lines.push(`    {yellow-fg}▶ ${stepNumber} {bold}${step.name}{/bold} (${stepDuration}s){/}`)
+                } else {
+                  // Upcoming steps (pending, waiting)
+                  const stepIcon = step.status === 'waiting' ? '⏳' : '○'
+                  lines.push(`    {gray-fg}${stepIcon} ${stepNumber} ${step.name}{/}`)
+                }
+              }
+              
+              // Show if there are more steps after what we're displaying
+              if (endIndex < job.steps.length) {
+                const remainingSteps = job.steps.length - endIndex
+                lines.push(`    {gray-fg}... and ${remainingSteps} more step${remainingSteps > 1 ? 's' : ''}{/}`)
               }
             }
-            
-            // Show next few steps in queue
-            const queuedSteps = job.steps.filter(s => s.status === 'pending' || s.status === 'waiting').slice(0, 2)
-            queuedSteps.forEach(step => {
-              lines.push(`    {gray-fg}○{/gray-fg} ${step.name}`)
-            })
           }
           
           // Show completion info for completed jobs
@@ -420,7 +501,7 @@ Press any key to close...`,
   }
 
   onRefresh(callback: () => void): void {
-    this.screen.on('refresh', callback)
+    this.screen.on('manual-refresh', callback)
   }
 
   onOpenWorkflow(callback: (workflow: WorkflowRun) => void): void {
@@ -460,7 +541,36 @@ Press any key to close...`,
     this.screen.render()
   }
 
+  private cleanup(): void {
+    // Emit exit event for the app to handle
+    this.screen.emit('exit')
+    // Clean shutdown
+    this.destroy()
+    process.exit(0)
+  }
+
+  onExit(callback: () => void): void {
+    this.screen.on('exit', callback)
+  }
+
+  showLoadingInStatus(): void {
+    // Don't update status if modal is open
+    if (this.isModalOpen) return
+    
+    // Public method to show loading in status bar
+    const now = new Date()
+    this.statusBox.setContent(`{center}Refreshing... | Last Update: ${now.toLocaleTimeString()} | Press 'h' for help{/center}`)
+    this.screen.render()
+  }
+
   destroy(): void {
-    this.screen.destroy()
+    // Clean up any event listeners
+    process.removeAllListeners('SIGINT')
+    process.removeAllListeners('SIGTERM')
+    
+    // Destroy the blessed screen
+    if (this.screen) {
+      this.screen.destroy()
+    }
   }
 }
