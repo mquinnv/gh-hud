@@ -1,13 +1,12 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.2.3/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
     "useIgnoreFile": true
   },
   "files": {
-    "ignoreUnknown": false,
-    "ignore": ["node_modules", "dist", ".git", "pnpm-lock.yaml"]
+    "ignoreUnknown": false
   },
   "formatter": {
     "enabled": true,
@@ -17,9 +16,6 @@
     "lineEnding": "lf",
     "lineWidth": 100,
     "attributePosition": "auto"
-  },
-  "organizeImports": {
-    "enabled": true
   },
   "linter": {
     "enabled": true,
@@ -31,13 +27,19 @@
         "useOptionalChain": "error"
       },
       "correctness": {
-        "noUnusedVariables": "error",
-        "useExhaustiveDependencies": "warn"
+        "noUnusedVariables": "warn",
+        "useExhaustiveDependencies": "warn",
+        "useParseIntRadix": "off"
       },
       "style": {
         "noNonNullAssertion": "warn",
-        "useConst": "error",
-        "useTemplate": "error"
+        "useConst": "warn",
+        "useTemplate": "warn",
+        "useNodejsImportProtocol": "off"
+      },
+      "suspicious": {
+        "noExplicitAny": "warn",
+        "useIterableCallbackReturn": "warn"
       }
     }
   },

@@ -1,0 +1,31 @@
+# Source files
+src/
+*.ts
+!dist/**/*.d.ts
+
+# Development files
+.git/
+.github/
+.vscode/
+node_modules/
+pnpm-lock.yaml
+
+# Config files
+tsconfig.json
+biome.json
+.gitignore
+.npmignore
+
+# Development scripts
+bin/
+
+# Documentation source
+*.md
+!README.md
+
+# Test files
+test/
+tests/
+__tests__/
+*.test.*
+*.spec.*

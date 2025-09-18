@@ -1,44 +1,44 @@
 #!/usr/bin/env node
 
-import blessed from 'blessed'
+import blessed from "blessed"
 
-console.log('Creating blessed screen...')
+console.log("Creating blessed screen...")
 
 const screen = blessed.screen({
   smartCSR: true,
-  title: 'Debug Test',
+  title: "Debug Test",
   fullUnicode: true,
   autoPadding: true,
-  warnings: false
+  warnings: false,
 })
 
-console.log('Screen created, setting up...')
+console.log("Screen created, setting up...")
 
 const box = blessed.box({
   parent: screen,
-  top: 'center',
-  left: 'center', 
-  width: '50%',
-  height: '50%',
-  content: 'Hello! Press q to quit.',
+  top: "center",
+  left: "center",
+  width: "50%",
+  height: "50%",
+  content: "Hello! Press q to quit.",
   tags: true,
   border: {
-    type: 'line'
+    type: "line",
   },
   style: {
-    fg: 'white',
+    fg: "white",
     border: {
-      fg: 'cyan'
-    }
-  }
+      fg: "cyan",
+    },
+  },
 })
 
-screen.key(['q', 'C-c'], () => {
-  console.log('Exiting...')
+screen.key(["q", "C-c"], () => {
+  console.log("Exiting...")
   process.exit(0)
 })
 
-console.log('Rendering screen...')
+console.log("Rendering screen...")
 screen.render()
 
-console.log('Screen should be visible now')
+console.log("Screen should be visible now")

@@ -1,9 +1,9 @@
-import { exec } from 'child_process'
-import { promisify } from 'util'
-import { GitHubService } from './github.js'
-import { ConfigManager } from './config.js'
-import { Dashboard } from './dashboard.js'
-import type { WorkflowRun, WorkflowJob } from './types.js'
+import { exec } from "child_process"
+import { promisify } from "util"
+import { ConfigManager } from "./config.js"
+import { Dashboard } from "./dashboard.js"
+import { GitHubService } from "./github.js"
+import type { WorkflowJob, WorkflowRun } from "./types.js"
 
 const execAsync = promisify(exec)
 
@@ -46,12 +46,12 @@ export class App {
 
     // Build repository list
     this.repositories = await this.configManager.buildRepositoryList(this.githubService)
-    
+
     if (this.repositories.length === 0) {
       // Will show empty state in UI
       this.repositories = []
     }
-    
+
     // Set up event handlers
     this.setupEventHandlers()
 
@@ -78,16 +78,16 @@ export class App {
       try {
         const url = workflow.htmlUrl
         const platform = process.platform
-        
+
         let command: string
-        if (platform === 'darwin') {
+        if (platform === "darwin") {
           command = `open "${url}"`
-        } else if (platform === 'win32') {
+        } else if (platform === "win32") {
           command = `start "${url}"`
         } else {
           command = `xdg-open "${url}"`
         }
-        
+
         await execAsync(command)
       } catch (error) {
         // Silently fail
@@ -118,7 +118,7 @@ export class App {
 
       // Update watched and completed trackers
       for (const run of allRuns) {
-        if (run.status !== 'completed') {
+        if (run.status !== "completed") {
           this.watchedWorkflows.add(run.id)
         } else if (this.watchedWorkflows.has(run.id) && !this.completedWorkflows.has(run.id)) {
           // Transitioned to completed while being watched
@@ -127,14 +127,14 @@ export class App {
       }
 
       // Visible workflows = active runs + completed pending confirmation, excluding dismissed
-      const workflows = allRuns.filter(run => {
-        if (run.status !== 'completed') return true
+      const workflows = allRuns.filter((run) => {
+        if (run.status !== "completed") return true
         return this.completedWorkflows.has(run.id)
       })
-      
+
       // Fetch jobs for active workflows
       const jobPromises = workflows
-        .filter(w => w.status !== 'completed')
+        .filter((w) => w.status !== "completed")
         .map(async (workflow) => {
           const repo = `${workflow.repository.owner}/${workflow.repository.name}`
           const jobs = await this.githubService.getWorkflowJobs(repo, workflow.id)
@@ -142,7 +142,7 @@ export class App {
         })
 
       const jobResults = await Promise.all(jobPromises)
-      
+
       // Update jobs map
       this.jobs.clear()
       jobResults.forEach(({ id, jobs }) => {
@@ -152,8 +152,8 @@ export class App {
       // Update dashboard
       this.dashboard.updateWorkflows(workflows, this.jobs)
     } catch (error) {
-      // Show error in dashboard if first load fails  
-      console.error('Error in refresh():', error)
+      // Show error in dashboard if first load fails
+      console.error("Error in refresh():", error)
       this.dashboard.showError(`Failed to load workflows: ${error}`)
     } finally {
       this.isRefreshing = false
@@ -184,7 +184,7 @@ export class App {
 
   private dismissAllCompletedWorkflows(workflows: WorkflowRun[]): void {
     // Remove all completed workflows from tracking
-    workflows.forEach(workflow => {
+    workflows.forEach((workflow) => {
       this.completedWorkflows.delete(workflow.id)
       this.watchedWorkflows.delete(workflow.id)
     })
@@ -196,11 +196,11 @@ export class App {
     // Get the last known workflows from the dashboard and filter out dismissed ones
     // This avoids an expensive API call just to update the display
     const currentWorkflows = this.dashboard.getCurrentWorkflows()
-    const filteredWorkflows = currentWorkflows.filter(run => {
-      if (run.status !== 'completed') return true
+    const filteredWorkflows = currentWorkflows.filter((run) => {
+      if (run.status !== "completed") return true
       return this.completedWorkflows.has(run.id)
     })
-    
+
     // Update dashboard with filtered workflows immediately
     this.dashboard.updateWorkflows(filteredWorkflows, this.jobs)
   }

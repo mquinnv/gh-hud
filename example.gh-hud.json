@@ -1,14 +1,6 @@
 {
-  "repositories": [
-    "mquinnv/gh-hud",
-    "mquinnv/spec-workflow-dashboard"
-  ],
-  "organizations": [
-    "mquinnv",
-    "phenixcrm",
-    "inetalliance",
-    "ameriglide"
-  ],
+  "repositories": ["mquinnv/gh-hud", "mquinnv/spec-workflow-dashboard"],
+  "organizations": ["mquinnv", "phenixcrm", "inetalliance", "ameriglide"],
   "refreshInterval": 5000,
   "maxWorkflows": 20,
   "filterStatus": ["in_progress", "queued"],

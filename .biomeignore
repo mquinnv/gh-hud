@@ -1,0 +1,7 @@
+node_modules/
+dist/
+test-*.js
+test-*.cjs
+debug-*.js
+*.test.js
+*.spec.js

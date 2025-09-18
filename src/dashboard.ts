@@ -1,5 +1,5 @@
-import blessed from 'blessed'
-import type { WorkflowRun, WorkflowJob } from './types.js'
+import blessed from "blessed"
+import type { WorkflowJob, WorkflowRun } from "./types.js"
 
 export class Dashboard {
   private screen: blessed.Widgets.Screen
@@ -15,7 +15,7 @@ export class Dashboard {
   constructor() {
     this.screen = blessed.screen({
       smartCSR: true,
-      title: 'GitHub Workflow Monitor',
+      title: "GitHub Workflow Monitor",
       fullUnicode: true,
       mouse: true,
       sendFocus: true,
@@ -23,153 +23,152 @@ export class Dashboard {
       keys: true,
       vi: false,
       input: process.stdin,
-      output: process.stdout
+      output: process.stdout,
     })
 
     // Create status bar at the bottom
     this.statusBox = blessed.box({
       bottom: 0,
       left: 0,
-      width: '100%',
+      width: "100%",
       height: 3,
       tags: true,
       border: {
-        type: 'line'
+        type: "line",
       },
       style: {
-        fg: 'white',
-        bg: 'black',
+        fg: "white",
+        bg: "black",
         border: {
-          fg: '#f0f0f0'
-        }
-      }
+          fg: "#f0f0f0",
+        },
+      },
     })
 
     this.screen.append(this.statusBox)
 
     // Handle screen-level mouse clicks for card selection
-    this.screen.on('click', (data) => {
+    this.screen.on("click", (data) => {
       this.handleScreenClick(data.x, data.y)
     })
 
-
     // Set up key bindings
     this.setupKeyBindings()
-    
+
     // Manual key handling as fallback for problematic keys
-    this.screen.on('keypress', (_ch, key) => {
+    this.screen.on("keypress", (_ch, key) => {
       if (!key) return
-      
+
       // Manual key handling for uppercase D as fallback
-      if (key.name === 'd' && key.shift && !key.ctrl && !key.meta) {
-        const completedWorkflows = this.workflows.filter(w => w.status === 'completed')
+      if (key.name === "d" && key.shift && !key.ctrl && !key.meta) {
+        const completedWorkflows = this.workflows.filter((w) => w.status === "completed")
         if (completedWorkflows.length > 0) {
-          this.screen.emit('dismiss-all-completed', completedWorkflows)
+          this.screen.emit("dismiss-all-completed", completedWorkflows)
         }
         return // Prevent further processing
       }
-      
+
       // Handle lowercase d manually as additional backup
-      if (key.name === 'd' && !key.shift && !key.ctrl && !key.meta) {
+      if (key.name === "d" && !key.shift && !key.ctrl && !key.meta) {
         const workflow = this.workflows[this.selectedIndex]
-        if (workflow && workflow.status === 'completed') {
-          this.screen.emit('dismiss-workflow', workflow)
+        if (workflow && workflow.status === "completed") {
+          this.screen.emit("dismiss-workflow", workflow)
         }
       }
     })
 
     // Handle resize
-    this.screen.on('resize', () => {
+    this.screen.on("resize", () => {
       this.layoutWorkflows()
     })
 
     // Show initial status (no loading dialog)
     this.showInitialState()
-    
+
     // Ensure screen can receive key events and render
     this.screen.render()
-    
+
     // Make sure we're listening for the right key events
-    this.screen.program.input.setEncoding('utf8')
+    this.screen.program.input.setEncoding("utf8")
     this.screen.program.input.resume()
   }
 
   private setupKeyBindings(): void {
     // Make sure the screen is focused and can receive key events
     // Note: blessed screens don't have a focus() method
-    
+
     // Handle quit commands with proper cleanup
-    this.screen.key(['q', 'C-c'], () => {
+    this.screen.key(["q", "C-c"], () => {
       this.cleanup()
     })
 
     // Handle manual refresh
-    this.screen.key(['r'], () => {
-      this.screen.emit('manual-refresh')
+    this.screen.key(["r"], () => {
+      this.screen.emit("manual-refresh")
     })
 
     // 2D Grid Navigation keys
-    this.screen.key(['up', 'k', 'C-p'], () => {
-      this.navigateGrid('up')
+    this.screen.key(["up", "k", "C-p"], () => {
+      this.navigateGrid("up")
     })
 
-    this.screen.key(['down', 'j', 'C-n'], () => {
-      this.navigateGrid('down')
+    this.screen.key(["down", "j", "C-n"], () => {
+      this.navigateGrid("down")
     })
 
     // Left/right navigation
-    this.screen.key(['left'], () => {
-      this.navigateGrid('left')
+    this.screen.key(["left"], () => {
+      this.navigateGrid("left")
     })
 
-    this.screen.key(['right'], () => {
-      this.navigateGrid('right')
+    this.screen.key(["right"], () => {
+      this.navigateGrid("right")
     })
 
     // Open workflow in browser
-    this.screen.key(['enter'], () => {
+    this.screen.key(["enter"], () => {
       const workflow = this.workflows[this.selectedIndex]
       if (workflow) {
-        this.screen.emit('open-workflow', workflow)
+        this.screen.emit("open-workflow", workflow)
       }
     })
 
     // Dismiss completed workflow
-    this.screen.key(['d'], () => {
+    this.screen.key(["d"], () => {
       const workflow = this.workflows[this.selectedIndex]
-      if (workflow && workflow.status === 'completed') {
-        this.screen.emit('dismiss-workflow', workflow)
+      if (workflow && workflow.status === "completed") {
+        this.screen.emit("dismiss-workflow", workflow)
       }
     })
 
     // Dismiss ALL completed workflows - comprehensive key handling
     const dismissAllHandler = () => {
-      const completedWorkflows = this.workflows.filter(w => w.status === 'completed')
+      const completedWorkflows = this.workflows.filter((w) => w.status === "completed")
       if (completedWorkflows.length > 0) {
-        this.screen.emit('dismiss-all-completed', completedWorkflows)
+        this.screen.emit("dismiss-all-completed", completedWorkflows)
       }
     }
-    
+
     // Try multiple key binding approaches
-    this.screen.key(['D'], dismissAllHandler)
-    this.screen.key(['S-d'], dismissAllHandler)
-    this.screen.key(['shift+d'], dismissAllHandler)
+    this.screen.key(["D"], dismissAllHandler)
+    this.screen.key(["S-d"], dismissAllHandler)
+    this.screen.key(["shift+d"], dismissAllHandler)
 
     // Show help
-    this.screen.key(['h', '?'], () => {
+    this.screen.key(["h", "?"], () => {
       this.showHelp()
     })
 
     // Also handle process signals for clean shutdown
-    process.on('SIGINT', () => this.cleanup())
-    process.on('SIGTERM', () => this.cleanup())
+    process.on("SIGINT", () => this.cleanup())
+    process.on("SIGTERM", () => this.cleanup())
   }
 
   // Convert linear array index to 2D grid coordinates
-  private indexToCoords(index: number): { row: number, col: number } {
+  private indexToCoords(index: number): { row: number; col: number } {
     return {
       row: Math.floor(index / this.cols),
-      col: index % this.cols
+      col: index % this.cols,
     }
   }
 
@@ -188,7 +187,7 @@ export class Dashboard {
   }
 
   // Navigate the 2D grid spatially
-  private navigateGrid(direction: 'up' | 'down' | 'left' | 'right'): void {
+  private navigateGrid(direction: "up" | "down" | "left" | "right"): void {
     if (this.workflows.length === 0) return
 
     const currentCoords = this.indexToCoords(this.selectedIndex)
@@ -196,7 +195,7 @@ export class Dashboard {
     let newCol = currentCoords.col
 
     switch (direction) {
-      case 'up':
+      case "up":
         newRow = currentCoords.row - 1
         // If at top row, don't wrap - stay in place
         if (newRow < 0) {
@@ -204,7 +203,7 @@ export class Dashboard {
         }
         break
 
-      case 'down':
+      case "down":
         newRow = currentCoords.row + 1
         // If at bottom row, don't wrap - stay in place
         if (newRow >= this.rows) {
@@ -212,7 +211,7 @@ export class Dashboard {
         }
         break
 
-      case 'left':
+      case "left":
         newCol = currentCoords.col - 1
         // If at leftmost column, don't wrap - stay in place
         if (newCol < 0) {
@@ -220,7 +219,7 @@ export class Dashboard {
         }
         break
 
-      case 'right':
+      case "right":
         newCol = currentCoords.col + 1
         // If at rightmost column, don't wrap - stay in place
         if (newCol >= this.cols) {
@@ -238,19 +237,24 @@ export class Dashboard {
   }
 
   private getBorderColor(workflow: WorkflowRun, isSelected: boolean): string {
-    if (isSelected) return 'cyan' // Selected always gets cyan border
-    
-    if (workflow.status === 'completed') {
+    if (isSelected) return "cyan" // Selected always gets cyan border
+
+    if (workflow.status === "completed") {
       switch (workflow.conclusion) {
-        case 'success': return 'green'
-        case 'failure': return 'red'
-        case 'cancelled': return 'red'
-        case 'skipped': return 'gray'
-        default: return '#f0f0f0'
+        case "success":
+          return "green"
+        case "failure":
+          return "red"
+        case "cancelled":
+          return "red"
+        case "skipped":
+          return "gray"
+        default:
+          return "#f0f0f0"
       }
     }
-    
-    return '#f0f0f0' // Default border for active workflows
+
+    return "#f0f0f0" // Default border for active workflows
   }
 
   private highlightSelected(): void {
@@ -258,14 +262,14 @@ export class Dashboard {
       const workflow = this.workflows[index]
       if (index === this.selectedIndex) {
         // Selected card: bright cyan border for high visibility
-        box.style.border = { fg: 'cyan' }
+        box.style.border = { fg: "cyan" }
       } else if (workflow) {
         // Unselected workflow: status-based border color
         const borderColor = this.getBorderColor(workflow, false)
         box.style.border = { fg: borderColor }
       } else {
         // Default styling
-        box.style.border = { fg: '#f0f0f0' }
+        box.style.border = { fg: "#f0f0f0" }
       }
     })
     this.screen.render()
@@ -279,7 +283,7 @@ export class Dashboard {
       const top = box.top as number
       const width = box.width as number
       const height = box.height as number
-      
+
       if (x >= left && x < left + width && y >= top && y < top + height) {
         this.selectedIndex = i
         this.highlightSelected()
@@ -292,10 +296,10 @@ export class Dashboard {
     this.isModalOpen = true
     const helpBox = blessed.box({
       parent: this.screen,
-      top: 'center',
-      left: 'center',
-      width: '50%',
-      height: '50%',
+      top: "center",
+      left: "center",
+      width: "50%",
+      height: "50%",
       content: `
 {center}{bold}GitHub Workflow Monitor - Help{/bold}{/center}
 
@@ -326,41 +330,40 @@ export class Dashboard {
 Press 'h' or 'Esc' to close...`,
       tags: true,
       border: {
-        type: 'line'
+        type: "line",
       },
       style: {
-        fg: 'white',
-        bg: 'black',
+        fg: "white",
+        bg: "black",
         border: {
-          fg: 'cyan'
-        }
+          fg: "cyan",
+        },
       },
       keys: true,
       mouse: true,
-      input: true
+      input: true,
     })
 
     helpBox.focus()
-    
+
     // Close help on any key press
     const closeHelp = () => {
       this.isModalOpen = false
       helpBox.destroy()
       this.screen.render()
     }
-    
+
     // Listen for specific keys to close the help
-    helpBox.key(['h', 'escape'], closeHelp)
+    helpBox.key(["h", "escape"], closeHelp)
 
     this.screen.render()
   }
 
   private showInitialState(): void {
     // Just show the status bar with loading message - no intrusive dialog
-    this.statusBox.setContent('{center}Loading workflows... Press \'q\' to quit{/center}')
+    this.statusBox.setContent("{center}Loading workflows... Press 'q' to quit{/center}")
     this.screen.render()
   }
-
 
   updateWorkflows(workflows: WorkflowRun[], jobs: Map<string, WorkflowJob[]>): void {
     // Don't update the display if a modal dialog is open
@@ -369,7 +372,7 @@ Press 'h' or 'Esc' to close...`,
       this.workflows = workflows
       return
     }
-    
+
     this.workflows = workflows
     this.layoutWorkflows()
     this.renderWorkflows(workflows, jobs)
@@ -381,10 +384,10 @@ Press 'h' or 'Esc' to close...`,
 
   private layoutWorkflows(): void {
     // Clear existing workflow boxes
-    this.grid.forEach(box => box.destroy())
+    this.grid.forEach((box) => box.destroy())
     this.grid = []
 
-    const screenHeight = this.screen.height as number - 3 // Account for status bar
+    const screenHeight = (this.screen.height as number) - 3 // Account for status bar
     const screenWidth = this.screen.width as number
     const count = this.workflows.length
 
@@ -394,7 +397,7 @@ Press 'h' or 'Esc' to close...`,
         parent: this.screen,
         top: 0,
         left: 0,
-        width: '100%',
+        width: "100%",
         height: screenHeight,
         content: `{center}No running workflows found{/center}
 
@@ -405,14 +408,14 @@ Press 'h' or 'Esc' to close...`,
 {center}To see activity, trigger a workflow in your repositories{/center}`,
         tags: true,
         border: {
-          type: 'line'
+          type: "line",
         },
         style: {
-          fg: 'gray',
+          fg: "gray",
           border: {
-            fg: '#f0f0f0'
-          }
-        }
+            fg: "#f0f0f0",
+          },
+        },
       })
       this.grid.push(emptyBox)
       return
@@ -421,10 +424,10 @@ Press 'h' or 'Esc' to close...`,
     // Calculate grid layout - use full width for single card
     this.cols = count === 1 ? 1 : Math.min(Math.ceil(Math.sqrt(count)), 3)
     this.rows = Math.ceil(count / this.cols)
-    
+
     const boxWidth = Math.floor(screenWidth / this.cols)
     const boxHeight = Math.floor(screenHeight / this.rows)
-    
+
     // Store box width for use in formatting
     this.currentBoxWidth = boxWidth
 
@@ -433,7 +436,9 @@ Press 'h' or 'Esc' to close...`,
       const row = Math.floor(i / this.cols)
       const col = i % this.cols
       const workflow = this.workflows[i]
-      const borderColor = workflow ? this.getBorderColor(workflow, i === this.selectedIndex) : '#f0f0f0'
+      const borderColor = workflow
+        ? this.getBorderColor(workflow, i === this.selectedIndex)
+        : "#f0f0f0"
 
       const box = blessed.box({
         parent: this.screen,
@@ -443,48 +448,48 @@ Press 'h' or 'Esc' to close...`,
         height: boxHeight,
         tags: true,
         border: {
-          type: 'line'
+          type: "line",
         },
         style: {
-          fg: 'white',
+          fg: "white",
           border: {
-            fg: borderColor
-          }
+            fg: borderColor,
+          },
         },
         scrollable: true,
         alwaysScroll: true,
         mouse: true,
         keys: true,
-        vi: true
+        vi: true,
       })
 
       // Add mouse click event listener for selection
-      box.on('click', () => {
+      box.on("click", () => {
         this.selectedIndex = i
         this.highlightSelected()
       })
 
       // Add double-click event listener for opening workflow
-      box.on('dblclick', () => {
+      box.on("dblclick", () => {
         this.selectedIndex = i
         this.highlightSelected()
         const workflow = this.workflows[i]
         if (workflow) {
-          this.screen.emit('open-workflow', workflow)
+          this.screen.emit("open-workflow", workflow)
         }
       })
 
       // Add right-click event listener for dismissing completed workflows
-      box.on('rightclick', () => {
+      box.on("rightclick", () => {
         const workflow = this.workflows[i]
-        if (workflow && workflow.status === 'completed') {
-          this.screen.emit('dismiss-workflow', workflow)
+        if (workflow && workflow.status === "completed") {
+          this.screen.emit("dismiss-workflow", workflow)
         }
       })
 
       this.grid.push(box)
     }
-    
+
     // Ensure selection highlighting is applied after creating all boxes
     this.highlightSelected()
   }
@@ -495,7 +500,11 @@ Press 'h' or 'Esc' to close...`,
 
       const box = this.grid[index]
       const isSelected = index === this.selectedIndex
-      const content = this.formatWorkflowContent(workflow, jobs.get(`${workflow.id}`) || [], isSelected)
+      const content = this.formatWorkflowContent(
+        workflow,
+        jobs.get(`${workflow.id}`) || [],
+        isSelected,
+      )
       box.setContent(content)
     })
 
@@ -503,9 +512,13 @@ Press 'h' or 'Esc' to close...`,
     this.screen.render()
   }
 
-  private formatWorkflowContent(workflow: WorkflowRun, jobs: WorkflowJob[], isSelected: boolean = false): string {
+  private formatWorkflowContent(
+    workflow: WorkflowRun,
+    jobs: WorkflowJob[],
+    isSelected: boolean = false,
+  ): string {
     const lines: string[] = []
-    
+
     // Determine if we should show all steps based on number of workflows
     const showAllSteps = this.workflows.length <= 2
 
@@ -515,7 +528,7 @@ Press 'h' or 'Esc' to close...`,
       const repoLine = ` ${workflow.repository.owner}/${workflow.repository.name}`
       const workflowLine = ` ${workflow.workflowName}`
       const runLine = ` Run #${workflow.runNumber}`
-      
+
       // Pad to actual card width minus border (2 chars) and some margin
       const padWidth = Math.max(30, this.currentBoxWidth - 4)
       lines.push(`{inverse}${repoLine.padEnd(padWidth)}{/inverse}`)
@@ -526,7 +539,7 @@ Press 'h' or 'Esc' to close...`,
       lines.push(`{cyan-fg}${workflow.workflowName}{/cyan-fg}`)
       lines.push(`Run #{yellow-fg}${workflow.runNumber}{/yellow-fg}`)
     }
-    lines.push('')
+    lines.push("")
 
     // Branch and commit info
     lines.push(`Branch: {yellow-fg}${workflow.headBranch}{/yellow-fg}`)
@@ -534,19 +547,19 @@ Press 'h' or 'Esc' to close...`,
     if (workflow.headSha) {
       lines.push(`SHA: {gray-fg}${workflow.headSha.substring(0, 7)}{/gray-fg}`)
     }
-    lines.push('')
+    lines.push("")
 
     // Status with more detail
     const statusIcon = this.getStatusIcon(workflow.status, workflow.conclusion)
     const statusColor = this.getStatusColor(workflow.status, workflow.conclusion)
     lines.push(`Status: {${statusColor}-fg}${statusIcon} ${workflow.status.toUpperCase()}{/}`)
-    
+
     if (workflow.conclusion) {
       lines.push(`Result: {${statusColor}-fg}${workflow.conclusion.toUpperCase()}{/}`)
     }
 
     // Show dismiss hint for completed workflows
-    if (workflow.status === 'completed') {
+    if (workflow.status === "completed") {
       lines.push(`{gray-fg}Right-click or 'd' to dismiss{/gray-fg}`)
     }
 
@@ -559,39 +572,41 @@ Press 'h' or 'Esc' to close...`,
       const seconds = duration % 60
       lines.push(`Running: {white-fg}${minutes}m ${seconds}s{/white-fg}`)
     }
-    
+
     if (workflow.createdAt !== workflow.startedAt) {
-      const queueTime = new Date(workflow.startedAt || workflow.createdAt).getTime() - new Date(workflow.createdAt).getTime()
+      const queueTime =
+        new Date(workflow.startedAt || workflow.createdAt).getTime() -
+        new Date(workflow.createdAt).getTime()
       if (queueTime > 1000) {
         const queueSeconds = Math.floor(queueTime / 1000)
         lines.push(`Queue time: {gray-fg}${queueSeconds}s{/gray-fg}`)
       }
     }
-    
-    lines.push('')
+
+    lines.push("")
 
     // Jobs with detailed step information
     if (jobs.length > 0) {
-      lines.push('{bold}Jobs & Steps:{/bold}')
-      jobs.forEach(job => {
+      lines.push("{bold}Jobs & Steps:{/bold}")
+      jobs.forEach((job) => {
         const jobIcon = this.getStatusIcon(job.status, job.conclusion)
         const jobColor = this.getStatusColor(job.status, job.conclusion)
         lines.push(`  {${jobColor}-fg}${jobIcon} ${job.name}{/}`)
-        
+
         if (job.steps && job.steps.length > 0) {
           // Show progress for running jobs
-          if (job.status === 'in_progress') {
-            const completedSteps = job.steps.filter(s => s.status === 'completed').length
+          if (job.status === "in_progress") {
+            const completedSteps = job.steps.filter((s) => s.status === "completed").length
             const totalSteps = job.steps.length
-            const currentStepIndex = job.steps.findIndex(s => s.status === 'in_progress')
-            
+            const currentStepIndex = job.steps.findIndex((s) => s.status === "in_progress")
+
             lines.push(`    Progress: {cyan-fg}${completedSteps}/${totalSteps} steps{/cyan-fg}`)
-            
+
             if (currentStepIndex >= 0) {
               // Determine how many steps to show based on available space
               let startIndex: number
               let endIndex: number
-              
+
               if (showAllSteps) {
                 // Show all steps when there are few workflows
                 startIndex = 0
@@ -601,81 +616,114 @@ Press 'h' or 'Esc' to close...`,
                 startIndex = Math.max(0, currentStepIndex - 2)
                 endIndex = Math.min(job.steps.length, currentStepIndex + 4)
               }
-              
+
               for (let i = startIndex; i < endIndex; i++) {
                 const step = job.steps[i]
                 const stepNumber = `${i + 1}/${totalSteps}`
-                
-                if (step.status === 'completed') {
-                  const stepIcon = step.conclusion === 'success' ? '✓' : 
-                                   step.conclusion === 'failure' ? '✗' : 
-                                   step.conclusion === 'skipped' ? '⊜' : '○'
-                  const stepColor = step.conclusion === 'success' ? 'green' : 
-                                    step.conclusion === 'failure' ? 'red' : 'gray'
-                  
-                  let duration = ''
+
+                if (step.status === "completed") {
+                  const stepIcon =
+                    step.conclusion === "success"
+                      ? "✓"
+                      : step.conclusion === "failure"
+                        ? "✗"
+                        : step.conclusion === "skipped"
+                          ? "⊜"
+                          : "○"
+                  const stepColor =
+                    step.conclusion === "success"
+                      ? "green"
+                      : step.conclusion === "failure"
+                        ? "red"
+                        : "gray"
+
+                  let duration = ""
                   if (step.startedAt && step.completedAt) {
-                    const dur = Math.floor((new Date(step.completedAt).getTime() - new Date(step.startedAt).getTime()) / 1000)
+                    const dur = Math.floor(
+                      (new Date(step.completedAt).getTime() - new Date(step.startedAt).getTime()) /
+                        1000,
+                    )
                     duration = ` (${dur}s)`
                   }
-                  
-                  lines.push(`    {${stepColor}-fg}${stepIcon}{/} {gray-fg}${stepNumber}{/} ${step.name}{gray-fg}${duration}{/}`)
-                } else if (step.status === 'in_progress') {
+
+                  lines.push(
+                    `    {${stepColor}-fg}${stepIcon}{/} {gray-fg}${stepNumber}{/} ${step.name}{gray-fg}${duration}{/}`,
+                  )
+                } else if (step.status === "in_progress") {
                   // Current running step - highlighted
-                  const stepDuration = step.startedAt ? 
-                    Math.floor((new Date().getTime() - new Date(step.startedAt).getTime()) / 1000) : 0
-                  
-                  lines.push(`    {yellow-fg}▶ ${stepNumber} {bold}${step.name}{/bold} (${stepDuration}s){/}`)
+                  const stepDuration = step.startedAt
+                    ? Math.floor((new Date().getTime() - new Date(step.startedAt).getTime()) / 1000)
+                    : 0
+
+                  lines.push(
+                    `    {yellow-fg}▶ ${stepNumber} {bold}${step.name}{/bold} (${stepDuration}s){/}`,
+                  )
                 } else {
                   // Upcoming steps (pending, waiting)
-                  const stepIcon = step.status === 'waiting' ? '⏳' : '○'
+                  const stepIcon = step.status === "waiting" ? "⏳" : "○"
                   lines.push(`    {gray-fg}${stepIcon} ${stepNumber} ${step.name}{/}`)
                 }
               }
-              
+
               // Show if there are more steps after what we're displaying (only when not showing all)
               if (!showAllSteps && endIndex < job.steps.length) {
                 const remainingSteps = job.steps.length - endIndex
-                lines.push(`    {gray-fg}... and ${remainingSteps} more step${remainingSteps > 1 ? 's' : ''}{/}`)
+                lines.push(
+                  `    {gray-fg}... and ${remainingSteps} more step${remainingSteps > 1 ? "s" : ""}{/}`,
+                )
               }
             }
           }
-          
+
           // Show completion info for completed jobs
-          else if (job.status === 'completed') {
+          else if (job.status === "completed") {
             if (showAllSteps && job.steps && job.steps.length > 0) {
               // Show all completed steps with details when there's room
               job.steps.forEach((step, index) => {
                 const stepNumber = `${index + 1}/${job.steps!.length}`
-                const stepIcon = step.conclusion === 'success' ? '✓' : 
-                                 step.conclusion === 'failure' ? '✗' : 
-                                 step.conclusion === 'skipped' ? '⊜' : '○'
-                const stepColor = step.conclusion === 'success' ? 'green' : 
-                                  step.conclusion === 'failure' ? 'red' : 'gray'
-                
-                let duration = ''
+                const stepIcon =
+                  step.conclusion === "success"
+                    ? "✓"
+                    : step.conclusion === "failure"
+                      ? "✗"
+                      : step.conclusion === "skipped"
+                        ? "⊜"
+                        : "○"
+                const stepColor =
+                  step.conclusion === "success"
+                    ? "green"
+                    : step.conclusion === "failure"
+                      ? "red"
+                      : "gray"
+
+                let duration = ""
                 if (step.startedAt && step.completedAt) {
-                  const dur = Math.floor((new Date(step.completedAt).getTime() - new Date(step.startedAt).getTime()) / 1000)
+                  const dur = Math.floor(
+                    (new Date(step.completedAt).getTime() - new Date(step.startedAt).getTime()) /
+                      1000,
+                  )
                   duration = ` (${dur}s)`
                 }
-                
-                lines.push(`    {${stepColor}-fg}${stepIcon}{/} {gray-fg}${stepNumber}{/} ${step.name}{gray-fg}${duration}{/}`)
+
+                lines.push(
+                  `    {${stepColor}-fg}${stepIcon}{/} {gray-fg}${stepNumber}{/} ${step.name}{gray-fg}${duration}{/}`,
+                )
               })
             } else {
               // Show summary when there's limited space (existing behavior)
-              if (job.conclusion === 'success') {
+              if (job.conclusion === "success") {
                 lines.push(`    {green-fg}✓ All ${job.steps.length} steps completed{/green-fg}`)
-              } else if (job.conclusion === 'failure') {
-                const failedStep = job.steps.find(s => s.conclusion === 'failure')
+              } else if (job.conclusion === "failure") {
+                const failedStep = job.steps.find((s) => s.conclusion === "failure")
                 if (failedStep) {
                   lines.push(`    {red-fg}✗ Failed at: ${failedStep.name}{/red-fg}`)
                 }
               }
             }
           }
-          
+
           // Show queued job steps when there's room
-          else if (showAllSteps && (job.status === 'queued' || job.status === 'waiting')) {
+          else if (showAllSteps && (job.status === "queued" || job.status === "waiting")) {
             if (job.steps && job.steps.length > 0) {
               lines.push(`    {gray-fg}Queued - ${job.steps.length} steps pending{/gray-fg}`)
               job.steps.forEach((step, index) => {
@@ -687,94 +735,112 @@ Press 'h' or 'Esc' to close...`,
             }
           }
         }
-        
-        lines.push('')
+
+        lines.push("")
       })
     } else {
-      lines.push('{gray-fg}Loading job details...{/gray-fg}')
+      lines.push("{gray-fg}Loading job details...{/gray-fg}")
     }
 
-    return lines.join('\n')
+    return lines.join("\n")
   }
 
   private getStatusIcon(status: string, conclusion?: string): string {
-    if (status === 'completed') {
+    if (status === "completed") {
       switch (conclusion) {
-        case 'success': return '✓'
-        case 'failure': return '✗'
-        case 'cancelled': return '⊘'
-        case 'skipped': return '⊜'
-        default: return '?'
+        case "success":
+          return "✓"
+        case "failure":
+          return "✗"
+        case "cancelled":
+          return "⊘"
+        case "skipped":
+          return "⊜"
+        default:
+          return "?"
       }
     }
-    
+
     switch (status) {
-      case 'in_progress': return '●'
-      case 'queued': return '○'
-      default: return '?'
+      case "in_progress":
+        return "●"
+      case "queued":
+        return "○"
+      default:
+        return "?"
     }
   }
 
   private getStatusColor(status: string, conclusion?: string): string {
-    if (status === 'completed') {
+    if (status === "completed") {
       switch (conclusion) {
-        case 'success': return 'green'
-        case 'failure': return 'red'
-        case 'cancelled': return 'gray'
-        case 'skipped': return 'gray'
-        default: return 'white'
+        case "success":
+          return "green"
+        case "failure":
+          return "red"
+        case "cancelled":
+          return "gray"
+        case "skipped":
+          return "gray"
+        default:
+          return "white"
       }
     }
-    
+
     switch (status) {
-      case 'in_progress': return 'yellow'
-      case 'queued': return 'gray'
-      default: return 'white'
+      case "in_progress":
+        return "yellow"
+      case "queued":
+        return "gray"
+      default:
+        return "white"
     }
   }
 
   private updateStatusBar(): void {
     const now = new Date()
-    const runningCount = this.workflows.filter(w => w.status === 'in_progress').length
-    const queuedCount = this.workflows.filter(w => w.status === 'queued' || w.status === 'waiting').length
-    const completedCount = this.workflows.filter(w => w.status === 'completed').length
-    
+    const runningCount = this.workflows.filter((w) => w.status === "in_progress").length
+    const queuedCount = this.workflows.filter(
+      (w) => w.status === "queued" || w.status === "waiting",
+    ).length
+    const completedCount = this.workflows.filter((w) => w.status === "completed").length
+
     let content = `Last Update: ${now.toLocaleTimeString()} | Running: ${runningCount} | Queued: ${queuedCount}`
     if (completedCount > 0) {
       content += ` | Completed: ${completedCount} (awaiting dismissal)`
     }
     content += ` | Total: ${this.workflows.length} | Press 'h' for help`
-    
+
     this.statusBox.setContent(`{center}${content}{/center}`)
   }
 
   onRefresh(callback: () => void): void {
-    this.screen.on('manual-refresh', callback)
+    this.screen.on("manual-refresh", callback)
   }
 
   onOpenWorkflow(callback: (workflow: WorkflowRun) => void): void {
-    this.screen.on('open-workflow', callback)
+    this.screen.on("open-workflow", callback)
   }
 
   onDismissWorkflow(callback: (workflow: WorkflowRun) => void): void {
-    this.screen.on('dismiss-workflow', callback)
+    this.screen.on("dismiss-workflow", callback)
   }
 
   onDismissAllCompleted(callback: (workflows: WorkflowRun[]) => void): void {
-    this.screen.on('dismiss-all-completed', callback)
+    this.screen.on("dismiss-all-completed", callback)
   }
 
   showError(message: string): void {
     // Clear existing content
-    this.grid.forEach(box => box.destroy())
+    this.grid.forEach((box) => box.destroy())
     this.grid = []
 
     const errorBox = blessed.box({
       parent: this.screen,
-      top: 'center',
-      left: 'center',
-      width: '80%',
-      height: '60%',
+      top: "center",
+      left: "center",
+      width: "80%",
+      height: "60%",
       content: `{center}{bold}Error Loading Workflows{/bold}{/center}
 
 {red-fg}${message}{/red-fg}
@@ -782,14 +848,14 @@ Press 'h' or 'Esc' to close...`,
 {center}Press 'r' to retry or 'q' to quit{/center}`,
       tags: true,
       border: {
-        type: 'line'
+        type: "line",
       },
       style: {
-        fg: 'white',
+        fg: "white",
         border: {
-          fg: 'red'
-        }
-      }
+          fg: "red",
+        },
+      },
     })
 
     this.grid.push(errorBox)
@@ -799,31 +865,33 @@ Press 'h' or 'Esc' to close...`,
 
   private cleanup(): void {
     // Emit exit event for the app to handle
-    this.screen.emit('exit')
+    this.screen.emit("exit")
     // Clean shutdown
     this.destroy()
     process.exit(0)
   }
 
   onExit(callback: () => void): void {
-    this.screen.on('exit', callback)
+    this.screen.on("exit", callback)
   }
 
   showLoadingInStatus(): void {
     // Don't update status if modal is open
     if (this.isModalOpen) return
-    
+
     // Public method to show loading in status bar
     const now = new Date()
-    this.statusBox.setContent(`{center}Refreshing... | Last Update: ${now.toLocaleTimeString()} | Press 'h' for help{/center}`)
+    this.statusBox.setContent(
+      `{center}Refreshing... | Last Update: ${now.toLocaleTimeString()} | Press 'h' for help{/center}`,
+    )
     this.screen.render()
   }
 
   destroy(): void {
     // Clean up any event listeners
-    process.removeAllListeners('SIGINT')
-    process.removeAllListeners('SIGTERM')
-    
+    process.removeAllListeners("SIGINT")
+    process.removeAllListeners("SIGTERM")
+
     // Destroy the blessed screen
     if (this.screen) {
       this.screen.destroy()

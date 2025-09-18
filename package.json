@@ -1,11 +1,27 @@
 {
   "name": "gh-hud",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "GitHub workflow monitoring dashboard for terminal",
   "main": "dist/index.js",
   "type": "module",
   "bin": {
-    "gh-hud": "./bin/gh-hud.js"
+    "gh-hud": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mquinnv/gh-hud.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mquinnv/gh-hud/issues"
+  },
+  "homepage": "https://github.com/mquinnv/gh-hud#readme",
+  "engines": {
+    "node": ">=18.0.0"
   },
   "scripts": {
     "build": "tsc",
@@ -15,7 +31,7 @@
     "format": "biome format --write .",
     "test": "echo \"Error: no test specified\" && exit 1",
     "gh-hud": "node dist/index.js",
-    "postinstall": "pnpm build"
+    "prepublishOnly": "pnpm run build && pnpm run lint"
   },
   "keywords": [
     "github",

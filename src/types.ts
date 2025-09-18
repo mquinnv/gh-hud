@@ -5,8 +5,15 @@ export interface WorkflowRun {
   headSha: string
   runNumber: number
   event: string
-  status: 'queued' | 'in_progress' | 'completed' | 'waiting'
-  conclusion?: 'success' | 'failure' | 'cancelled' | 'neutral' | 'skipped' | 'timed_out' | 'action_required'
+  status: "queued" | "in_progress" | "completed" | "waiting"
+  conclusion?:
+    | "success"
+    | "failure"
+    | "cancelled"
+    | "neutral"
+    | "skipped"
+    | "timed_out"
+    | "action_required"
   workflowId: number
   workflowName: string
   url: string
@@ -31,8 +38,15 @@ export interface WorkflowJob {
   id: number
   runId: number
   name: string
-  status: 'queued' | 'in_progress' | 'completed'
-  conclusion?: 'success' | 'failure' | 'cancelled' | 'neutral' | 'skipped' | 'timed_out' | 'action_required'
+  status: "queued" | "in_progress" | "completed"
+  conclusion?:
+    | "success"
+    | "failure"
+    | "cancelled"
+    | "neutral"
+    | "skipped"
+    | "timed_out"
+    | "action_required"
   startedAt?: string
   completedAt?: string
   steps?: WorkflowStep[]
@@ -40,8 +54,8 @@ export interface WorkflowJob {
 
 export interface WorkflowStep {
   name: string
-  status: 'queued' | 'in_progress' | 'completed' | 'pending' | 'waiting'
-  conclusion?: 'success' | 'failure' | 'cancelled' | 'neutral' | 'skipped'
+  status: "queued" | "in_progress" | "completed" | "pending" | "waiting"
+  conclusion?: "success" | "failure" | "cancelled" | "neutral" | "skipped"
   number: number
   startedAt?: string
   completedAt?: string
