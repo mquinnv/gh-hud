@@ -1,6 +1,7 @@
 import { readFile } from "fs/promises"
 import { homedir } from "os"
 import { join } from "path"
+import { execa } from "execa"
 import type { Config } from "./types.js"
 
 const DEFAULT_CONFIG: Config = {
@@ -14,6 +15,30 @@ const DEFAULT_CONFIG: Config = {
 
 export class ConfigManager {
   private config: Config = { ...DEFAULT_CONFIG }
+
+  // Try to detect the current directory's GitHub repository
+  private async getCurrentRepo(): Promise<string | null> {
+    try {
+      // Check if we're in a git repository
+      await execa("git", ["rev-parse", "--git-dir"])
+
+      // Get the GitHub remote URL
+      const { stdout } = await execa("git", ["remote", "get-url", "origin"])
+
+      // Parse GitHub repo from URL
+      // Handles: https://github.com/owner/repo.git
+      //          git@github.com:owner/repo.git
+      //          gh:owner/repo
+      const match = stdout.match(/github\.com[:/]([^/]+\/[^/.]+)(\.git)?$/)
+      if (match) {
+        return match[1]
+      }
+
+      return null
+    } catch {
+      return null
+    }
+  }
 
   async loadConfig(configPath?: string): Promise<Config> {
     const paths = [
@@ -96,11 +121,22 @@ export class ConfigManager {
       }
     }
 
-    // Only fetch all user repos if explicitly no config was provided anywhere
-    // Commenting this out - users should explicitly specify what they want to monitor
-    // if (repos.size === 0) {
-    //   console.error("No repositories specified. Please specify repos with --repo or orgs with --org")
-    // }
+    // If no repos specified, try to use current directory's repo
+    if (repos.size === 0) {
+      const currentRepo = await this.getCurrentRepo()
+      if (currentRepo) {
+        console.error(`Using current repository: ${currentRepo}`)
+        repos.add(currentRepo)
+      } else {
+        console.error("\nNo repositories specified and not in a GitHub repository.")
+        console.error("\nUsage:")
+        console.error("  gh-hud --repo owner/repo1 owner/repo2   # Monitor specific repos")
+        console.error("  gh-hud --org org-name                    # Monitor all repos in an org")
+        console.error("  gh-hud                                   # When in a git repo, monitor that repo")
+        console.error("\nOr create a config file at ~/.config/gh-hud/config.json")
+        process.exit(1)
+      }
+    }
 
     console.error(`Total repositories to monitor: ${repos.size}`)
     return Array.from(repos)

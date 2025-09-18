@@ -2,11 +2,12 @@
 
 A terminal-based dashboard for monitoring GitHub Actions workflows across multiple repositories. Similar to `gh run watch` but displays multiple workflows simultaneously in a grid layout.
 
-![GitHub Workflow Monitor](https://img.shields.io/badge/version-1.0.0-blue)
+![GitHub Workflow Monitor](https://img.shields.io/badge/version-1.0.2-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## Features
 
+- 🎯 **Auto-Detection**: Automatically monitors the current directory's GitHub repository when run without arguments
 - 📊 **Multi-Repository Monitoring**: Watch workflows from multiple repositories and organizations simultaneously
 - 🔄 **Auto-Refresh**: Configurable refresh interval to keep workflow status up-to-date
 - 🎨 **Color-Coded Status**: Visual indicators for workflow status (running, success, failure, queued)
@@ -22,6 +23,14 @@ A terminal-based dashboard for monitoring GitHub Actions workflows across multip
 - GitHub access to repositories you want to monitor
 
 ## Installation
+
+### From npm (recommended)
+
+```bash
+npm install -g gh-hud
+```
+
+### From source
 
 ```bash
 # Clone the repository
@@ -42,16 +51,22 @@ pnpm link --global
 
 ### Basic Usage
 
-Monitor all repositories from your default organizations:
+When in a GitHub repository directory, monitor that repository:
 
 ```bash
 gh-hud
 ```
 
-### Monitor Specific Repositories
+Monitor specific repositories:
 
 ```bash
-gh-hud mquinnv/gh-hud phenixcrm/phenixcrm
+gh-hud --repo owner/repo1 owner/repo2
+```
+
+Or using the shorthand:
+
+```bash
+gh-hud -r owner/repo1 owner/repo2
 ```
 
 ### Monitor Organization Repositories
@@ -98,7 +113,7 @@ Create a `.gh-hud.json` file in your home directory or project root:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `repositories` | string[] | [] | Specific repositories to monitor |
-| `organizations` | string[] | ["mquinnv", "inetalliance", "ameriglide", "phenixcrm"] | Organizations to monitor |
+| `organizations` | string[] | [] | Organizations to monitor |
 | `refreshInterval` | number | 5000 | Refresh interval in milliseconds |
 | `maxWorkflows` | number | 20 | Maximum number of workflows to display |
 | `filterStatus` | string[] | ["in_progress", "queued"] | Filter workflows by status |
