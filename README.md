@@ -2,19 +2,23 @@
 
 A terminal-based dashboard for monitoring GitHub Actions workflows across multiple repositories. Similar to `gh run watch` but displays multiple workflows simultaneously in a grid layout.
 
-![GitHub Workflow Monitor](https://img.shields.io/badge/version-1.0.2-blue)
+![GitHub Workflow Monitor](https://img.shields.io/badge/version-1.1.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## Features
 
 - 🎯 **Auto-Detection**: Automatically monitors the current directory's GitHub repository when run without arguments
 - 📊 **Multi-Repository Monitoring**: Watch workflows from multiple repositories and organizations simultaneously
-- 🔄 **Auto-Refresh**: Configurable refresh interval to keep workflow status up-to-date
+- 🔄 **Auto-Refresh**: Configurable refresh interval with smooth animated spinner
 - 🎨 **Color-Coded Status**: Visual indicators for workflow status (running, success, failure, queued)
-- ⌨️ **Keyboard Navigation**: Navigate between workflows, refresh manually, and open in browser
+- ⌨️ **Keyboard Navigation**: Navigate between workflows using arrow keys or vim-style keys
 - 📐 **Dynamic Layout**: Automatically adjusts grid layout based on terminal size and number of workflows
 - 🔧 **Configurable**: Support for configuration files and command-line arguments
 - 📦 **Job Details**: View individual job status and current running steps
+- 📝 **Event Log**: Built-in event log with configurable log levels (INFO/DEBUG/TRACE)
+- 💾 **Persistent Settings**: Remembers your preferences between sessions
+- 📊 **Enhanced Status Bar**: Two-line status display with keyboard shortcuts reference
+- 🔔 **Pull Request Monitoring**: Optional display of open pull requests (--show-prs flag)
 
 ## Prerequisites
 
@@ -87,6 +91,12 @@ gh-hud --interval 10  # Refresh every 10 seconds
 gh-hud --config ~/.gh-hud.json
 ```
 
+### Show Pull Requests
+
+```bash
+gh-hud --show-prs  # Display open PRs in header
+```
+
 ## Configuration
 
 Create a `.gh-hud.json` file in your home directory or project root:
@@ -121,14 +131,32 @@ Create a `.gh-hud.json` file in your home directory or project root:
 
 ## Keyboard Shortcuts
 
+### Navigation
 | Key | Action |
 |-----|--------|
 | `↑` / `k` | Move selection up |
 | `↓` / `j` | Move selection down |
+| `←` / `h` | Move selection left |
+| `→` / `l` | Move selection right |
 | `Enter` | Open selected workflow in browser |
-| `r` | Force refresh |
-| `h` / `?` | Show help |
+| `?` | Show help |
 | `q` / `Ctrl+C` | Quit |
+
+### Workflow Management
+| Key | Action |
+|-----|--------|
+| `d` | Dismiss completed workflow |
+| `D` | Dismiss ALL completed workflows |
+| `r` | Force refresh |
+
+### Event Log
+| Key | Action |
+|-----|--------|
+| `F9` | Toggle event log visibility |
+| `F10` | Cycle log level (INFO → DEBUG → TRACE) |
+| `a` | Toggle auto-show on startup |
+| `Ctrl+k` | Increase event log height |
+| `Ctrl+d` | Decrease event log height |
 
 ## Status Indicators
 
@@ -138,6 +166,16 @@ Create a `.gh-hud.json` file in your home directory or project root:
 - ⚪ **Gray (○)**: Workflow is queued
 - ⚪ **Gray (⊘)**: Workflow was cancelled
 - ⚪ **Gray (⊜)**: Workflow was skipped
+
+## Event Log
+
+The built-in event log helps you track what's happening in your repositories:
+
+- **INFO Level**: Shows important events like workflow status changes
+- **DEBUG Level**: Includes refresh notifications and system messages
+- **TRACE Level**: Shows all messages including detailed state updates
+
+Press `F9` to toggle the event log, and `F10` to cycle through log levels. The log automatically filters messages based on your selected level. Your preferences (height, auto-show, log level) are saved between sessions.
 
 ## Development
 

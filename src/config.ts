@@ -1,8 +1,9 @@
+import { execa } from "execa"
 import { readFile } from "fs/promises"
 import { homedir } from "os"
 import { join } from "path"
-import { execa } from "execa"
 import type { Config } from "./types.js"
+import type { Dashboard } from "./dashboard.js"
 
 const DEFAULT_CONFIG: Config = {
   repositories: [],
@@ -95,7 +96,7 @@ export class ConfigManager {
   }
 
   // Build final list of repositories from config and orgs
-  async buildRepositoryList(githubService: any): Promise<string[]> {
+  async buildRepositoryList(githubService: any, dashboard?: Dashboard): Promise<string[]> {
     const repos = new Set<string>()
 
     // Add explicitly configured repositories
@@ -106,7 +107,7 @@ export class ConfigManager {
     // Add repositories from organizations with timeout protection
     for (const org of this.organizations) {
       try {
-        console.error(`Fetching repositories for org: ${org}`)
+        if (dashboard) dashboard.log(`Fetching repositories for org: ${org}`, "debug")
         const orgRepos = await Promise.race([
           githubService.listRepositories(org),
           new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 15000)),
@@ -114,9 +115,9 @@ export class ConfigManager {
         for (const repo of orgRepos) {
           repos.add(repo.fullName)
         }
-        console.error(`Found ${orgRepos.length} repos for ${org}`)
+        if (dashboard) dashboard.log(`Found ${orgRepos.length} repos for ${org}`, "debug")
       } catch (error) {
-        console.error(`Failed to fetch repos for org ${org}:`, error)
+        if (dashboard) dashboard.log(`Failed to fetch repos for org ${org}`, "error")
         // Continue with other orgs
       }
     }
@@ -125,20 +126,15 @@ export class ConfigManager {
     if (repos.size === 0) {
       const currentRepo = await this.getCurrentRepo()
       if (currentRepo) {
-        console.error(`Using current repository: ${currentRepo}`)
+        if (dashboard) dashboard.log(`Using current repository: ${currentRepo}`, "info")
         repos.add(currentRepo)
       } else {
-        console.error("\nNo repositories specified and not in a GitHub repository.")
-        console.error("\nUsage:")
-        console.error("  gh-hud --repo owner/repo1 owner/repo2   # Monitor specific repos")
-        console.error("  gh-hud --org org-name                    # Monitor all repos in an org")
-        console.error("  gh-hud                                   # When in a git repo, monitor that repo")
-        console.error("\nOr create a config file at ~/.config/gh-hud/config.json")
-        process.exit(1)
+        // No repos found - dashboard will show empty state with instructions
+        if (dashboard) dashboard.log("No repositories specified", "info")
       }
     }
 
-    console.error(`Total repositories to monitor: ${repos.size}`)
+    if (dashboard) dashboard.log(`Total repositories to monitor: ${repos.size}`, "info")
     return Array.from(repos)
   }
 }

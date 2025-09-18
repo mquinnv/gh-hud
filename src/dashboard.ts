@@ -1,37 +1,125 @@
 import blessed from "blessed"
-import type { WorkflowJob, WorkflowRun } from "./types.js"
+import * as fs from "fs"
+import * as path from "path"
+import * as os from "os"
+import type { PullRequest, WorkflowJob, WorkflowRun } from "./types.js"
 
 export class Dashboard {
   private screen: blessed.Widgets.Screen
   private grid: blessed.Widgets.BoxElement[] = []
   private statusBox: blessed.Widgets.BoxElement
+  private debugBox: blessed.Widgets.BoxElement
+  private prHeaderBox?: blessed.Widgets.BoxElement
+  private helpBox?: blessed.Widgets.BoxElement
   private selectedIndex = 0
   private workflows: WorkflowRun[] = []
-  private isModalOpen = false
+  private pullRequests: PullRequest[] = []
+  private jobsCache = new Map<string, WorkflowJob[]>() // Cache for job data
+  private modalOpen = false
   private currentBoxWidth = 80
   private cols = 1 // Number of columns in the grid
   private rows = 1 // Number of rows in the grid
+  private showPRs = false
+  private showDebug = false // Hidden by default, press F9 to show
+  private autoShowDebug = false // Whether to show debug log on startup
+  private logLevel: "info" | "debug" | "trace" = "info" // Filter level for event log
+  private logMessages: Array<{message: string, type: string, timestamp: string, formatted: string}> = []
+  private maxLogMessages = 100 // Keep last 100 messages
+  private debugBoxHeight = 5 // Default height, can be resized
+  private minDebugHeight = 3
+  private maxDebugHeight = 15
+  private layoutInProgress = false
+  private uiUpdateInProgress = false
+  private keyEventQueue: Array<() => void> = []
+  private pendingPrefsLog: string[] = [] // Store preference log messages until UI is ready
+  private debugUpdateTimer?: NodeJS.Timeout // Timer for batched debug box updates
+  private refreshAnimationTimer?: NodeJS.Timeout // Timer for refresh animation
+  private refreshAnimationFrame = 0 // Current frame of refresh animation
+  private lastRefreshTime?: Date // Track when data was actually refreshed
+  private lastStatusLine1 = "" // Cache last status line to avoid re-rendering
+  private lastStatusLine2 = "" // Cache last status line to avoid re-rendering
 
   constructor() {
+    // Load saved preferences
+    this.loadPreferences()
+
+    // Disable mouse tracking completely
+    if (process.stdout.isTTY) {
+      // Disable mouse reporting sequences
+      process.stdout.write('\x1b[?1000l') // Disable X10 mouse
+      process.stdout.write('\x1b[?1002l') // Disable button event mouse
+      process.stdout.write('\x1b[?1003l') // Disable any-event mouse
+      process.stdout.write('\x1b[?1006l') // Disable SGR mouse
+    }
+
+    // Override TERM environment variable to force a simpler terminal
+    const originalTerm = process.env.TERM
+    process.env.TERM = 'xterm-color' // Use xterm-color which doesn't have Setulc
+
     this.screen = blessed.screen({
       smartCSR: true,
       title: "GitHub Workflow Monitor",
       fullUnicode: true,
-      mouse: true,
-      sendFocus: true,
       warnings: false,
       keys: true,
       vi: false,
+      mouse: false, // Explicitly disable mouse support
       input: process.stdin,
       output: process.stdout,
+      terminal: 'xterm-color', // Force xterm-color to avoid Setulc
+      forceUnicode: true,
+      fastCSR: true, // Use fast CSR to reduce flickering
+      useBCE: false, // Don't use background color erase which can cause flicker
+      autoPadding: false, // Disable auto padding which can cause redraws
+      ignoreDockContrast: true, // Avoid special terminal handling
+      dockContrast: false, // Disable dock contrast which may trigger Setulc
     })
 
-    // Create status bar at the bottom
+    // Restore original TERM after screen creation
+    if (originalTerm) {
+      process.env.TERM = originalTerm
+    }
+
+    // Create debug/log box (sits above status bar when shown)
+    this.debugBox = blessed.box({
+      bottom: 3,
+      left: 0,
+      width: "100%",
+      height: this.debugBoxHeight,
+      tags: true,
+      border: {
+        type: "line",
+      },
+      style: {
+        fg: "cyan",
+        bg: "black",
+        border: {
+          fg: "#444444",
+        },
+      },
+      scrollable: true,
+      alwaysScroll: true,
+      scrollbar: {
+        ch: " ",
+        track: {
+          bg: "cyan",
+        },
+        style: {
+          inverse: true,
+        },
+      },
+      keys: true,
+      vi: false, // Disable vi mode to prevent ESC from closing
+      label: " Event Log (F9 to toggle) ",
+      hidden: !this.showDebug,
+    })
+
+    // Create status bar at the bottom (2 lines of content + border)
     this.statusBox = blessed.box({
       bottom: 0,
       left: 0,
       width: "100%",
-      height: 3,
+      height: 4,
       tags: true,
       border: {
         type: "line",
@@ -45,12 +133,11 @@ export class Dashboard {
       },
     })
 
+    this.screen.append(this.debugBox)
     this.screen.append(this.statusBox)
 
-    // Handle screen-level mouse clicks for card selection
-    this.screen.on("click", (data) => {
-      this.handleScreenClick(data.x, data.y)
-    })
+    // Create help box (hidden initially)
+    this.createHelpBox()
 
     // Set up key bindings
     this.setupKeyBindings()
@@ -58,6 +145,11 @@ export class Dashboard {
     // Manual key handling as fallback for problematic keys
     this.screen.on("keypress", (_ch, key) => {
       if (!key) return
+
+      // Ignore ESC key presses
+      if (key.name === "escape") {
+        return // Prevent any default handling
+      }
 
       // Manual key handling for uppercase D as fallback
       if (key.name === "d" && key.shift && !key.ctrl && !key.meta) {
@@ -91,6 +183,59 @@ export class Dashboard {
     // Make sure we're listening for the right key events
     this.screen.program.input.setEncoding("utf8")
     this.screen.program.input.resume()
+
+    // Force the screen to grab keys and focus
+    this.screen.enableKeys()
+
+    // Hide cursor
+    if (this.screen.program) {
+      this.screen.program.hideCursor()
+
+      // Remove Setulc capability entirely from terminfo
+      const program = this.screen.program as any
+      if (program.terminfo) {
+        delete program.terminfo.Setulc
+        delete program.terminfo.setulc
+      }
+      if (program.terminal) {
+        delete program.terminal.Setulc
+        delete program.terminal.setulc
+      }
+      // Also remove from the blessed tput if it exists
+      if (program.tput) {
+        delete program.tput.Setulc
+        delete program.tput.setulc
+      }
+
+      // Wrap ALL program methods to catch terminal errors
+      // Wrap the _write method which is what actually outputs
+      const original_write = program._write?.bind(program) || program.write?.bind(program)
+      if (original_write) {
+        program._write = function(text: any) {
+          try {
+            return original_write(text)
+          } catch (error: any) {
+            // Silently ignore ALL terminal capability errors
+            process.stderr.write(`\nIgnoring terminal error: ${error.message?.substring(0, 50)}\n`)
+            return true
+          }
+        }
+      }
+
+      // Also wrap the main write method
+      const originalWrite = program.write?.bind(program)
+      if (originalWrite) {
+        program.write = function(text: any) {
+          try {
+            return originalWrite(text)
+          } catch (error: any) {
+            // Silently ignore terminal capability errors
+            process.stderr.write(`\nIgnoring write error: ${error.message?.substring(0, 50)}\n`)
+            return true
+          }
+        }
+      }
+    }
   }
 
   private setupKeyBindings(): void {
@@ -107,22 +252,22 @@ export class Dashboard {
       this.screen.emit("manual-refresh")
     })
 
-    // 2D Grid Navigation keys
+    // 2D Grid Navigation keys (vim-style)
     this.screen.key(["up", "k", "C-p"], () => {
-      this.navigateGrid("up")
+      this.queueKeyEvent(() => this.navigateGrid("up"))
     })
 
     this.screen.key(["down", "j", "C-n"], () => {
-      this.navigateGrid("down")
+      this.queueKeyEvent(() => this.navigateGrid("down"))
     })
 
-    // Left/right navigation
-    this.screen.key(["left"], () => {
-      this.navigateGrid("left")
+    // Left/right navigation (vim-style)
+    this.screen.key(["left", "h"], () => {
+      this.queueKeyEvent(() => this.navigateGrid("left"))
     })
 
-    this.screen.key(["right"], () => {
-      this.navigateGrid("right")
+    this.screen.key(["right", "l"], () => {
+      this.queueKeyEvent(() => this.navigateGrid("right"))
     })
 
     // Open workflow in browser
@@ -154,21 +299,74 @@ export class Dashboard {
     this.screen.key(["S-d"], dismissAllHandler)
     this.screen.key(["shift+d"], dismissAllHandler)
 
-    // Show help
-    this.screen.key(["h", "?"], () => {
+    // Show help - don't use queue, just show directly
+    this.screen.key(["?", "/"], () => {
+      // Removed debug output
       this.showHelp()
     })
 
+    // Toggle debug panel - F9 only, no F12 to avoid conflicts
+    this.screen.key(["f9"], () => {
+      this.queueKeyEvent(() => this.toggleDebug())
+    })
+
+    // Toggle log level (F10)
+    this.screen.key(["f10"], () => {
+      this.queueKeyEvent(() => this.toggleLogLevel())
+    })
+
+    // Toggle auto-show on startup (a for auto-show)
+    this.screen.key(["a", "A"], () => {
+      this.queueKeyEvent(() => this.toggleAutoShowDebug())
+    })
+
+    // Resize debug panel (when visible) - vim-style
+    this.screen.key(["C-k"], () => {
+      this.queueKeyEvent(() => {
+        if (this.showDebug) {
+          this.resizeDebugBox(1) // Increase height (up = more lines)
+        }
+      })
+    })
+
+    // Ctrl+j might be interpreted as newline in some terminals, so we need multiple bindings
+    const decreaseDebugHandler = () => {
+      this.queueKeyEvent(() => {
+        if (this.showDebug) {
+          this.resizeDebugBox(-1) // Decrease height (down = fewer lines)
+        }
+      })
+    }
+
+    this.screen.key(["C-j"], decreaseDebugHandler)
+    this.screen.key(["ctrl+j"], decreaseDebugHandler)
+    // Alternative keys for decreasing debug box size
+    this.screen.key(["C-d"], decreaseDebugHandler)
+    this.screen.key(["M-j"], decreaseDebugHandler) // Alt+j as alternative
+
     // Also handle process signals for clean shutdown
-    process.on("SIGINT", () => this.cleanup())
-    process.on("SIGTERM", () => this.cleanup())
+    process.on("SIGINT", () => {
+      this.log("Received SIGINT, saving preferences...", "info")
+      this.cleanup()
+    })
+    process.on("SIGTERM", () => {
+      this.log("Received SIGTERM, saving preferences...", "info")
+      this.cleanup()
+    })
+    // Handle uncaught exits
+    process.on("beforeExit", () => {
+      this.log("Process exiting, saving preferences...", "info")
+      this.savePreferences()
+    })
   }
 
   // Convert linear array index to 2D grid coordinates
   private indexToCoords(index: number): { row: number; col: number } {
+    // Ensure cols is at least 1 to avoid division by zero
+    const cols = Math.max(1, this.cols)
     return {
-      row: Math.floor(index / this.cols),
-      col: index % this.cols,
+      row: Math.floor(index / cols),
+      col: index % cols,
     }
   }
 
@@ -188,11 +386,29 @@ export class Dashboard {
 
   // Navigate the 2D grid spatially
   private navigateGrid(direction: "up" | "down" | "left" | "right"): void {
-    if (this.workflows.length === 0) return
+    try {
+      // Don't navigate if no workflows or grid not ready
+      if (this.workflows.length === 0 || this.grid.length === 0) return
 
-    const currentCoords = this.indexToCoords(this.selectedIndex)
-    let newRow = currentCoords.row
-    let newCol = currentCoords.col
+      // Check if layout is somehow being triggered
+      if (this.layoutInProgress) {
+        return // Don't navigate during layout
+      }
+
+      // Ensure cols and rows are initialized
+      if (!this.cols || !this.rows) {
+        this.cols = 1
+        this.rows = 1
+      }
+
+      // Ensure selectedIndex is valid
+      if (this.selectedIndex >= this.workflows.length || this.selectedIndex < 0) {
+        this.selectedIndex = 0
+      }
+
+      const currentCoords = this.indexToCoords(this.selectedIndex)
+      let newRow = currentCoords.row
+      let newCol = currentCoords.col
 
     switch (direction) {
       case "up":
@@ -212,6 +428,10 @@ export class Dashboard {
         break
 
       case "left":
+        // If only one column, can't move left
+        if (this.cols <= 1) {
+          return
+        }
         newCol = currentCoords.col - 1
         // If at leftmost column, don't wrap - stay in place
         if (newCol < 0) {
@@ -220,6 +440,10 @@ export class Dashboard {
         break
 
       case "right":
+        // If only one column, can't move right
+        if (this.cols <= 1) {
+          return
+        }
         newCol = currentCoords.col + 1
         // If at rightmost column, don't wrap - stay in place
         if (newCol >= this.cols) {
@@ -228,12 +452,22 @@ export class Dashboard {
         break
     }
 
-    // Check if the new position is valid (has a workflow)
-    if (this.isValidGridPosition(newRow, newCol)) {
-      this.selectedIndex = this.coordsToIndex(newRow, newCol)
-      this.highlightSelected()
+      // Check if the new position is valid (has a workflow)
+      if (this.isValidGridPosition(newRow, newCol)) {
+        const newIndex = this.coordsToIndex(newRow, newCol)
+        if (newIndex < this.workflows.length) {
+          this.selectedIndex = newIndex
+          this.highlightSelected()
+        }
+      }
+      // If invalid position (like last row with fewer items), don't move
+    } catch (error) {
+      // Log the error but don't crash
+      this.log(`Navigation error: ${error}`, "error")
+
+      // Write to stderr so we can see it even if the UI crashes
+      process.stderr.write(`\nNavigation error: ${error}\n`)
     }
-    // If invalid position (like last row with fewer items), don't move
   }
 
   private getBorderColor(workflow: WorkflowRun, isSelected: boolean): string {
@@ -257,44 +491,75 @@ export class Dashboard {
     return "#f0f0f0" // Default border for active workflows
   }
 
+  private lastSelectedIndex = -1
+
   private highlightSelected(): void {
-    this.grid.forEach((box, index) => {
-      const workflow = this.workflows[index]
-      if (index === this.selectedIndex) {
-        // Selected card: bright cyan border for high visibility
-        box.style.border = { fg: "cyan" }
-      } else if (workflow) {
-        // Unselected workflow: status-based border color
-        const borderColor = this.getBorderColor(workflow, false)
-        box.style.border = { fg: borderColor }
-      } else {
-        // Default styling
-        box.style.border = { fg: "#f0f0f0" }
-      }
-    })
-    this.screen.render()
-  }
+    // Don't highlight if grid is not ready
+    if (!this.grid || this.grid.length === 0) return
 
-  private handleScreenClick(x: number, y: number): void {
-    // Find which card was clicked based on coordinates
-    for (let i = 0; i < this.grid.length; i++) {
-      const box = this.grid[i]
-      const left = box.left as number
-      const top = box.top as number
-      const width = box.width as number
-      const height = box.height as number
+    // Ensure selectedIndex is valid
+    const maxIndex = Math.min(this.grid.length, this.workflows.length) - 1
+    if (this.selectedIndex > maxIndex) {
+      this.selectedIndex = Math.max(0, maxIndex)
+    }
 
-      if (x >= left && x < left + width && y >= top && y < top + height) {
-        this.selectedIndex = i
-        this.highlightSelected()
-        return
+    // Skip if selection hasn't changed
+    if (this.selectedIndex === this.lastSelectedIndex) {
+      return
+    }
+
+    try {
+      // Only update the two boxes that changed (old selected and new selected)
+      if (this.lastSelectedIndex >= 0 && this.lastSelectedIndex < this.grid.length) {
+        const oldBox = this.grid[this.lastSelectedIndex]
+        if (oldBox && oldBox.style && oldBox.style.border) {
+          const workflow = this.workflows[this.lastSelectedIndex]
+          oldBox.style.border.fg = workflow ? this.getBorderColor(workflow, false) : "#f0f0f0"
+        }
+
+        // Update old box content to remove selected header styling
+        const oldWorkflow = this.workflows[this.lastSelectedIndex]
+        if (oldWorkflow) {
+          const jobs = this.jobsCache.get(`${oldWorkflow.id}`) || []
+          const oldContent = this.formatWorkflowContent(oldWorkflow, jobs, false)
+          oldBox.setContent(oldContent)
+        }
       }
+
+      // Update new selected box
+      if (this.selectedIndex >= 0 && this.selectedIndex < this.grid.length) {
+        const newBox = this.grid[this.selectedIndex]
+        if (newBox && newBox.style && newBox.style.border) {
+          newBox.style.border.fg = "cyan"
+        }
+
+        // Update new box content to show selected header styling
+        const newWorkflow = this.workflows[this.selectedIndex]
+        if (newWorkflow) {
+          const jobs = this.jobsCache.get(`${newWorkflow.id}`) || []
+          const newContent = this.formatWorkflowContent(newWorkflow, jobs, true)
+          newBox.setContent(newContent)
+        }
+      }
+
+      this.lastSelectedIndex = this.selectedIndex
+
+      // Use batched render to avoid flickering
+      this.scheduleRender()
+    } catch (error) {
+      this.log(`Error in highlightSelected: ${error}`, "error")
     }
   }
 
-  private showHelp(): void {
-    this.isModalOpen = true
-    const helpBox = blessed.box({
+  // Removed screen click handler as it was causing issues with mouse hover
+
+  private createHelpBox(): void {
+    // Remove old help box if it exists
+    if (this.helpBox) {
+      this.helpBox.destroy()
+    }
+
+    this.helpBox = blessed.box({
       parent: this.screen,
       top: "center",
       left: "center",
@@ -306,20 +571,23 @@ export class Dashboard {
 {bold}Navigation:{/bold}
   ↑/k     - Move up in grid
   ↓/j     - Move down in grid
-  ←/→     - Move left/right in grid
+  ←/h     - Move left in grid
+  →/l     - Move right in grid
   Enter   - Open workflow in browser
-  
+
 {bold}Actions:{/bold}
   r       - Force refresh
   d       - Dismiss completed workflow
   D       - Dismiss ALL completed workflows
-  h/?     - Show this help
+  ?       - Show this help
   q/Ctrl+C - Quit
-  
-{bold}Mouse:{/bold}
-  Click   - Select workflow
-  Double-click - Open in browser
-  Right-click - Dismiss completed
+
+{bold}Options:{/bold}
+  --show-prs - Show open PRs in header bar
+  F9         - Toggle event log panel
+  F10        - Cycle log level (info/debug/trace)
+  a          - Toggle auto-show on startup
+  Ctrl+k/d   - Resize event log (when visible)
 
 {bold}Status Colors:{/bold}
   {yellow-fg}●{/} Running
@@ -327,7 +595,7 @@ export class Dashboard {
   {red-fg}●{/} Failed
   {gray-fg}●{/} Queued
 
-Press 'h' or 'Esc' to close...`,
+Press '?', '/', or 'Esc' to close...`,
       tags: true,
       border: {
         type: "line",
@@ -340,62 +608,253 @@ Press 'h' or 'Esc' to close...`,
         },
       },
       keys: true,
-      mouse: true,
-      input: true,
+      hidden: true, // Start hidden
+      focusable: false, // Don't steal focus when hidden
     })
 
-    helpBox.focus()
+    // Make sure help box is on top
+    this.helpBox.setFront()
 
-    // Close help on any key press
-    const closeHelp = () => {
-      this.isModalOpen = false
-      helpBox.destroy()
-      this.screen.render()
+    // Set up help box key handlers once
+    this.helpBox.key(["escape", "?", "/"], () => {
+      this.hideHelp()
+    })
+  }
+
+  private showHelp(): void {
+    // Don't check isUpdating - we want help to always work
+
+    // If already showing, hide it
+    if (this.modalOpen && this.helpBox && !this.helpBox.hidden) {
+      this.hideHelp()
+      return
     }
 
-    // Listen for specific keys to close the help
-    helpBox.key(["h", "escape"], closeHelp)
+    // Make sure help box exists
+    if (!this.helpBox) {
+      this.createHelpBox()
+    }
 
-    this.screen.render()
+    this.modalOpen = true
+    if (this.helpBox) {
+      this.helpBox.focusable = true // Make focusable when showing
+      this.helpBox.show()
+      this.helpBox.setFront() // Ensure it's on top
+      this.helpBox.focus()
+
+      // Force a render to show the help, catching any errors
+      try {
+        this.screen.render()
+      } catch (error: any) {
+        process.stderr.write(`\nHelp render error: ${error.message?.substring(0, 100)}\n`)
+
+        // Try to at least make it visible
+        try {
+          this.helpBox.setFront()
+          this.screen.render()
+        } catch (e) {
+          process.stderr.write(`\nCritical help render failure\n`)
+        }
+      }
+    }
+  }
+
+  private hideHelp(): void {
+    this.modalOpen = false
+    if (this.helpBox) {
+      this.helpBox.hide()
+      this.helpBox.focusable = false // Make non-focusable when hidden
+
+      // Try a safe render
+      try {
+        this.scheduleRender()
+      } catch (error: any) {
+        // Ignore render errors when closing help
+        process.stderr.write(`\nIgnoring help close render error\n`)
+      }
+    }
   }
 
   private showInitialState(): void {
     // Just show the status bar with loading message - no intrusive dialog
     this.statusBox.setContent("{center}Loading workflows... Press 'q' to quit{/center}")
+    this.log("GitHub HUD started", "info")
+
+    // Log any pending preference messages
+    if (this.pendingPrefsLog.length > 0) {
+      this.pendingPrefsLog.forEach(msg => this.log(msg, "debug"))
+      this.pendingPrefsLog = []
+    }
+
+    this.log("Press F9 to toggle event log, Ctrl+k/d to resize, 'a' for auto-show", "info")
+
+    if (this.autoShowDebug) {
+      this.log("Event log auto-show is ON - will show on startup", "info")
+    }
+
+    // Update the debug box content if it's visible
+    if (this.showDebug) {
+      this.updateDebugBox()
+    }
+
     this.screen.render()
   }
 
-  updateWorkflows(workflows: WorkflowRun[], jobs: Map<string, WorkflowJob[]>): void {
+  updateWorkflows(
+    workflows: WorkflowRun[],
+    jobs: Map<string, WorkflowJob[]>,
+    pullRequests?: PullRequest[],
+  ): void {
     // Don't update the display if a modal dialog is open
-    if (this.isModalOpen) {
+    if (this.modalOpen) {
       // Still update the data but don't re-render the screen
       this.workflows = workflows
+      this.pullRequests = pullRequests || []
+      this.jobsCache = jobs // Update the cache
       return
     }
 
-    this.workflows = workflows
-    this.layoutWorkflows()
-    this.renderWorkflows(workflows, jobs)
+    // Set update flag to prevent key events during update
+    this.uiUpdateInProgress = true
+
+    try {
+      // Track changes before updating
+      this.trackWorkflowChanges(workflows)
+
+      this.workflows = workflows
+      this.pullRequests = pullRequests || []
+      this.showPRs = pullRequests !== undefined
+      this.jobsCache = jobs // Update the cache
+
+      // Update debug info - now logged at trace level
+      this.updateDebugInfo({
+        showPRs: this.showPRs,
+        prCount: this.pullRequests.length,
+        workflowCount: this.workflows.length,
+        jobsLoaded: jobs.size,
+        lastUpdate: new Date().toLocaleTimeString(),
+      })
+
+      // Update PR header if needed
+      if (this.showPRs) {
+        this.createOrUpdatePRHeader()
+        if (this.pullRequests.length > 0) {
+          this.log(`Loaded ${this.pullRequests.length} open PRs`, "info")
+        }
+      }
+
+      this.layoutWorkflows()
+      this.renderWorkflows(workflows, jobs)
+    } finally {
+      this.uiUpdateInProgress = false
+      // Stop refresh animation
+      this.stopRefreshAnimation()
+      // Process any key events that were queued during the update
+      this.processQueuedKeyEvents()
+    }
   }
 
   getCurrentWorkflows(): WorkflowRun[] {
     return this.workflows
   }
 
-  private layoutWorkflows(): void {
-    // Clear existing workflow boxes
-    this.grid.forEach((box) => box.destroy())
-    this.grid = []
+  isModalOpen(): boolean {
+    return this.modalOpen
+  }
 
-    const screenHeight = (this.screen.height as number) - 3 // Account for status bar
+  isUpdating(): boolean {
+    return this.uiUpdateInProgress || this.layoutInProgress
+  }
+
+  private scheduleRender(): void {
+    // Just render immediately - batching might be causing delays
+    if (this.screen) {
+      try {
+        // Use realloc=false to avoid full screen clear
+        ;(this.screen as any).render(false)
+      } catch (error: any) {
+        // Catch and log render errors but don't crash
+        process.stderr.write(`\nRender error: ${error.message?.substring(0, 100)}\n`)
+
+        // Try a simpler render as fallback
+        try {
+          this.screen.render()
+        } catch (fallbackError) {
+          process.stderr.write(`\nFallback render also failed\n`)
+        }
+      }
+    }
+  }
+
+  private queueKeyEvent(handler: () => void): void {
+    try {
+      handler()
+    } catch (error) {
+      // Don't log here as it causes renders
+      process.stderr.write(`\nKey handler error: ${error}\n`)
+    }
+  }
+
+  private processQueuedKeyEvents(): void {
+    // Process all queued events
+    while (this.keyEventQueue.length > 0) {
+      const handler = this.keyEventQueue.shift()
+      if (handler) {
+        try {
+          handler()
+        } catch (error) {
+          this.log(`Error processing queued key event: ${error}`, "error")
+        }
+      }
+    }
+  }
+
+  private toggleLogLevel(): void {
+    // Cycle through log levels: info -> debug -> trace -> info
+    if (this.logLevel === "info") {
+      this.logLevel = "debug"
+    } else if (this.logLevel === "debug") {
+      this.logLevel = "trace"
+    } else {
+      this.logLevel = "info"
+    }
+
+    // Save the preference
+    this.savePreferences()
+
+    // Log the change
+    this.log(`Log level: ${this.logLevel} (F10 to cycle)`, "info")
+
+    // Update the debug box to reflect the filter change
+    if (this.showDebug) {
+      this.updateDebugBox()
+    }
+  }
+
+  private layoutWorkflows(): void {
+    // Prevent recursive layout calls
+    if (this.layoutInProgress) return
+    this.layoutInProgress = true
+
+    // Layout is being called - this should only happen on refresh, not on key presses
+
+    try {
+      // Build new grid before destroying old one (double-buffering)
+      const newGrid: blessed.Widgets.BoxElement[] = []
+
+    // Calculate available height (account for status bar, debug box, and PR header if shown)
+    const debugHeight = this.showDebug ? this.debugBoxHeight : 0
+    const prHeaderHeight = this.showPRs ? 5 : 0
+    const screenHeight = (this.screen.height as number) - 4 - debugHeight - prHeaderHeight // Status bar is now 4 high
     const screenWidth = this.screen.width as number
     const count = this.workflows.length
+    const topOffset = prHeaderHeight // Offset for PR header
 
     if (count === 0) {
       // Show empty state
       const emptyBox = blessed.box({
         parent: this.screen,
-        top: 0,
+        top: topOffset,
         left: 0,
         width: "100%",
         height: screenHeight,
@@ -417,7 +876,11 @@ Press 'h' or 'Esc' to close...`,
           },
         },
       })
-      this.grid.push(emptyBox)
+      newGrid.push(emptyBox)
+
+      // Now swap grids atomically
+      this.grid.forEach((box) => box.destroy())
+      this.grid = newGrid
       return
     }
 
@@ -442,7 +905,7 @@ Press 'h' or 'Esc' to close...`,
 
       const box = blessed.box({
         parent: this.screen,
-        top: row * boxHeight,
+        top: topOffset + row * boxHeight,
         left: col * boxWidth,
         width: boxWidth,
         height: boxHeight,
@@ -458,43 +921,29 @@ Press 'h' or 'Esc' to close...`,
         },
         scrollable: true,
         alwaysScroll: true,
-        mouse: true,
         keys: true,
-        vi: true,
+        vi: false,
       })
 
-      // Add mouse click event listener for selection
-      box.on("click", () => {
-        this.selectedIndex = i
-        this.highlightSelected()
-      })
-
-      // Add double-click event listener for opening workflow
-      box.on("dblclick", () => {
-        this.selectedIndex = i
-        this.highlightSelected()
-        const workflow = this.workflows[i]
-        if (workflow) {
-          this.screen.emit("open-workflow", workflow)
-        }
-      })
-
-      // Add right-click event listener for dismissing completed workflows
-      box.on("rightclick", () => {
-        const workflow = this.workflows[i]
-        if (workflow && workflow.status === "completed") {
-          this.screen.emit("dismiss-workflow", workflow)
-        }
-      })
-
-      this.grid.push(box)
+      newGrid.push(box)
     }
+
+    // Now swap grids atomically - destroy old boxes AFTER creating new ones
+    const oldGrid = this.grid
+    this.grid = newGrid
 
     // Ensure selection highlighting is applied after creating all boxes
     this.highlightSelected()
+
+    // Destroy old boxes after new ones are in place
+    oldGrid.forEach((box) => box.destroy())
+    } finally {
+      this.layoutInProgress = false
+    }
   }
 
   private renderWorkflows(workflows: WorkflowRun[], jobs: Map<string, WorkflowJob[]>): void {
+    // Batch all content updates before rendering
     workflows.forEach((workflow, index) => {
       if (index >= this.grid.length) return
 
@@ -509,6 +958,8 @@ Press 'h' or 'Esc' to close...`,
     })
 
     this.updateStatusBar()
+
+    // Single render call after all updates
     this.screen.render()
   }
 
@@ -560,7 +1011,7 @@ Press 'h' or 'Esc' to close...`,
 
     // Show dismiss hint for completed workflows
     if (workflow.status === "completed") {
-      lines.push(`{gray-fg}Right-click or 'd' to dismiss{/gray-fg}`)
+      lines.push(`{gray-fg}Press 'd' to dismiss{/gray-fg}`)
     }
 
     // Timing information
@@ -798,20 +1249,54 @@ Press 'h' or 'Esc' to close...`,
   }
 
   private updateStatusBar(): void {
-    const now = new Date()
     const runningCount = this.workflows.filter((w) => w.status === "in_progress").length
     const queuedCount = this.workflows.filter(
       (w) => w.status === "queued" || w.status === "waiting",
     ).length
     const completedCount = this.workflows.filter((w) => w.status === "completed").length
 
-    let content = `Last Update: ${now.toLocaleTimeString()} | Running: ${runningCount} | Queued: ${queuedCount}`
-    if (completedCount > 0) {
-      content += ` | Completed: ${completedCount} (awaiting dismissal)`
-    }
-    content += ` | Total: ${this.workflows.length} | Press 'h' for help`
+    // Animated refresh indicator - using braille spinner for smoothness
+    // Always reserve space for the spinner to prevent text jumping
+    const refreshFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    const refreshIndicator = this.refreshAnimationTimer ?
+      `{yellow-fg}${refreshFrames[this.refreshAnimationFrame % refreshFrames.length]}{/}` : " " // Space when not spinning
 
-    this.statusBox.setContent(`{center}${content}{/center}`)
+    // Use last refresh time if available
+    const updateTime = this.lastRefreshTime || new Date()
+
+    // Line 1: Status counts and refresh indicator (spinner space is always reserved)
+    let line1 = `${refreshIndicator} Last Update: ${updateTime.toLocaleTimeString()} | `
+    line1 += `{yellow-fg}●{/} Running: ${runningCount} | `
+    line1 += `{gray-fg}○{/} Queued: ${queuedCount}`
+    if (completedCount > 0) {
+      line1 += ` | {green-fg}✓{/} Done: ${completedCount}`
+    }
+    line1 += ` | Total: ${this.workflows.length}`
+
+    // Line 2: Keyboard shortcuts
+    const shortcuts = [
+      "?: help",
+      "q: quit",
+      "↑↓←→: nav",
+      "Enter: open",
+      "d/D: dismiss",
+      "F9: log",
+      "F10: level"
+    ]
+    const line2 = shortcuts.join(" | ")
+
+    // Only update if content actually changed (except for spinner)
+    const line1WithoutSpinner = line1.replace(/^.*?\} /, '') // Remove spinner part
+    const lastLine1WithoutSpinner = this.lastStatusLine1.replace(/^.*?\} /, '')
+
+    if (line1WithoutSpinner !== lastLine1WithoutSpinner || line2 !== this.lastStatusLine2) {
+      this.statusBox.setContent(`{center}${line1}{/center}\n{center}{gray-fg}${line2}{/gray-fg}{/center}`)
+      this.lastStatusLine1 = line1
+      this.lastStatusLine2 = line2
+    } else if (this.refreshAnimationTimer) {
+      // Just update the spinner portion without re-rendering everything
+      this.statusBox.setContent(`{center}${line1}{/center}\n{center}{gray-fg}${line2}{/gray-fg}{/center}`)
+    }
   }
 
   onRefresh(callback: () => void): void {
@@ -864,6 +1349,17 @@ Press 'h' or 'Esc' to close...`,
   }
 
   private cleanup(): void {
+    // Save preferences before exit
+    this.savePreferences()
+
+    // Disable mouse tracking before exit
+    if (process.stdout.isTTY) {
+      process.stdout.write('\x1b[?1000l')
+      process.stdout.write('\x1b[?1002l')
+      process.stdout.write('\x1b[?1003l')
+      process.stdout.write('\x1b[?1006l')
+    }
+
     // Emit exit event for the app to handle
     this.screen.emit("exit")
     // Clean shutdown
@@ -877,24 +1373,446 @@ Press 'h' or 'Esc' to close...`,
 
   showLoadingInStatus(): void {
     // Don't update status if modal is open
-    if (this.isModalOpen) return
+    if (this.modalOpen) return
 
-    // Public method to show loading in status bar
-    const now = new Date()
-    this.statusBox.setContent(
-      `{center}Refreshing... | Last Update: ${now.toLocaleTimeString()} | Press 'h' for help{/center}`,
-    )
-    this.screen.render()
+    // Start animation if not already running
+    if (!this.refreshAnimationTimer) {
+      this.startRefreshAnimation()
+    }
+
+    // Log refresh
+    this.log("Refreshing data...", "debug")
+  }
+
+  private startRefreshAnimation(): void {
+    // Don't start if already running
+    if (this.refreshAnimationTimer) return
+
+    // Reset frame counter
+    this.refreshAnimationFrame = 0
+
+    // Update immediately to show spinner
+    this.updateStatusBar()
+
+    // Start animation with moderate speed
+    this.refreshAnimationTimer = setInterval(() => {
+      this.refreshAnimationFrame++
+      // Only update the spinner, not the whole status bar
+      this.updateStatusBar()
+    }, 150) // 150ms for smooth but not excessive updates
+  }
+
+  stopRefreshAnimation(): void {
+    // Stop animation timer
+    if (this.refreshAnimationTimer) {
+      clearInterval(this.refreshAnimationTimer)
+      this.refreshAnimationTimer = undefined
+    }
+    this.refreshAnimationFrame = 0
+
+    // Record the actual refresh time
+    this.lastRefreshTime = new Date()
+
+    // Update status bar to remove refresh indicator
+    this.updateStatusBar()
   }
 
   destroy(): void {
+    // Save preferences before destroying
+    this.savePreferences()
+
     // Clean up any event listeners
     process.removeAllListeners("SIGINT")
     process.removeAllListeners("SIGTERM")
 
+    // Ensure mouse tracking is disabled on exit
+    if (process.stdout.isTTY) {
+      process.stdout.write('\x1b[?1000l')
+      process.stdout.write('\x1b[?1002l')
+      process.stdout.write('\x1b[?1003l')
+      process.stdout.write('\x1b[?1006l')
+    }
+
     // Destroy the blessed screen
     if (this.screen) {
       this.screen.destroy()
+    }
+  }
+
+  private createOrUpdatePRHeader(): void {
+    // Remove existing PR header if it exists
+    if (this.prHeaderBox) {
+      this.prHeaderBox.destroy()
+    }
+
+    // Create PR header box with border
+    this.prHeaderBox = blessed.box({
+      parent: this.screen,
+      top: 0,
+      left: 0,
+      width: "100%",
+      height: 5,
+      tags: true,
+      border: {
+        type: "line",
+      },
+      style: {
+        fg: "white",
+        bg: "black",
+        border: {
+          fg: "#666666",
+        },
+      },
+    })
+
+    // Format PR content
+    const prContent = this.formatPRHeader(this.pullRequests)
+    this.prHeaderBox.setContent(prContent)
+  }
+
+  private formatPRHeader(prs: PullRequest[]): string {
+    if (prs.length === 0) {
+      return "{center}{gray-fg}No open pull requests{/gray-fg}{/center}"
+    }
+
+    const lines: string[] = []
+    lines.push("{bold}{yellow-fg}Open Pull Requests:{/yellow-fg}{/bold}")
+    lines.push("")
+
+    // Group PRs by repository
+    const prsByRepo = new Map<string, PullRequest[]>()
+    for (const pr of prs) {
+      const key = `${pr.repository.owner}/${pr.repository.name}`
+      if (!prsByRepo.has(key)) {
+        prsByRepo.set(key, [])
+      }
+      prsByRepo.get(key)!.push(pr)
+    }
+
+    // Format each PR with status indicators
+    const prLines: string[] = []
+    for (const [repo, repoPrs] of prsByRepo) {
+      for (const pr of repoPrs) {
+        let statusIcon = ""
+        let statusColor = "white"
+
+        // Check status
+        if (pr.statusCheckRollup) {
+          switch (pr.statusCheckRollup.state) {
+            case "SUCCESS":
+              statusIcon = "✓"
+              statusColor = "green"
+              break
+            case "FAILURE":
+            case "ERROR":
+              statusIcon = "✗"
+              statusColor = "red"
+              break
+            case "PENDING":
+            case "EXPECTED":
+              statusIcon = "●"
+              statusColor = "yellow"
+              break
+          }
+        } else {
+          statusIcon = "○"
+          statusColor = "gray"
+        }
+
+        // Check review status
+        let reviewIcon = ""
+        if (pr.reviewDecision === "APPROVED") {
+          reviewIcon = " {green-fg}✓{/green-fg}"
+        } else if (pr.reviewDecision === "CHANGES_REQUESTED") {
+          reviewIcon = " {red-fg}⊗{/red-fg}"
+        }
+
+        // Check merge conflicts
+        let conflictIcon = ""
+        if (pr.mergeable === "CONFLICTING") {
+          conflictIcon = " {red-fg}⚠{/red-fg}"
+        }
+
+        // Draft indicator
+        const draftIndicator = pr.draft || pr.isDraft ? "{gray-fg}[DRAFT]{/gray-fg} " : ""
+
+        // Format the PR line
+        const prLine = `{${statusColor}-fg}${statusIcon}{/} ${draftIndicator}{cyan-fg}#${pr.number}{/} ${pr.title.substring(0, 50)} {gray-fg}(${pr.headRefName}){/gray-fg}${reviewIcon}${conflictIcon} {gray-fg}[${repo}]{/gray-fg}`
+        prLines.push(prLine)
+      }
+    }
+
+    // Show up to 2 PRs horizontally if space allows, otherwise just list them
+    const screenWidth = this.screen.width as number
+    if (screenWidth > 160 && prLines.length >= 2) {
+      // Two column layout
+      const half = Math.ceil(prLines.length / 2)
+      const leftColumn = prLines.slice(0, half)
+      const rightColumn = prLines.slice(half)
+
+      for (let i = 0; i < Math.max(leftColumn.length, rightColumn.length); i++) {
+        const left = leftColumn[i] || ""
+        const right = rightColumn[i] || ""
+        // Simple two column layout - left takes up to 80 chars, right gets the rest
+        lines.push(`  ${left.padEnd(Math.min(80, screenWidth / 2))} ${right}`)
+      }
+    } else {
+      // Single column layout
+      for (const prLine of prLines.slice(0, 3)) {
+        // Show max 3 PRs in header to save space
+        lines.push(`  ${prLine}`)
+      }
+      if (prLines.length > 3) {
+        lines.push(`  {gray-fg}... and ${prLines.length - 3} more{/gray-fg}`)
+      }
+    }
+
+    return lines.slice(0, 4).join("\n") // Limit to 4 lines to fit in 5-height box with border
+  }
+
+  log(message: string, type: "info" | "event" | "debug" | "trace" | "error" = "info"): void {
+    const timestamp = new Date().toLocaleTimeString()
+    const typeColors = {
+      info: "{white-fg}",
+      event: "{green-fg}",
+      debug: "{cyan-fg}",
+      trace: "{gray-fg}",
+      error: "{red-fg}",
+    }
+    const color = typeColors[type as keyof typeof typeColors] || "{white-fg}"
+    const formattedMessage = `${color}[${timestamp}] ${message}{/}`
+
+    this.logMessages.push({message, type, timestamp, formatted: formattedMessage})
+
+    // Keep only the last N messages
+    if (this.logMessages.length > this.maxLogMessages) {
+      this.logMessages = this.logMessages.slice(-this.maxLogMessages)
+    }
+
+    // Update the debug box content if it's visible (but batch updates)
+    if (this.showDebug && !this.debugBox.hidden) {
+      // Use a debounced update to avoid too many renders
+      if (!this.debugUpdateTimer) {
+        this.debugUpdateTimer = setTimeout(() => {
+          this.updateDebugBox()
+          this.debugUpdateTimer = undefined
+        }, 100) // Update after 100ms of no new logs
+      }
+    }
+  }
+
+  private updateDebugBox(): void {
+    if (!this.debugBox) return
+
+    // Define log level hierarchy
+    const levelHierarchy = {
+      info: 0,    // Show only info, event, and error
+      debug: 1,   // Also show debug
+      trace: 2    // Show everything including trace
+    }
+
+    const currentLevelValue = levelHierarchy[this.logLevel]
+
+    // Filter messages based on log level
+    const filteredMessages = this.logMessages
+      .filter(msg => {
+        // Always show info, event, and error
+        if (msg.type === "info" || msg.type === "event" || msg.type === "error") return true
+        // Show debug if level is debug or higher
+        if (msg.type === "debug") return currentLevelValue >= levelHierarchy.debug
+        // Show trace only if level is trace
+        if (msg.type === "trace") return currentLevelValue >= levelHierarchy.trace
+        return true
+      })
+      .map(msg => msg.formatted)
+
+    // Create colored log level indicator for the title
+    const levelIndicator = this.logLevel === "info" ? "{white-fg}[INFO]{/}" :
+                          this.logLevel === "debug" ? "{cyan-fg}[DEBUG]{/}" :
+                          "{gray-fg}[TRACE]{/}"
+
+    // Auto-show indicator - clear ON/OFF text
+    const autoShowStatus = this.autoShowDebug ? "{green-fg}ON{/}" : "{gray-fg}OFF{/}"
+
+    // Update the label to show colored log level and auto-show status
+    this.debugBox.setLabel(` Event Log ${levelIndicator} (F9: hide, F10: cycle level, a: auto-open ${autoShowStatus}) `)
+
+    // Set filtered messages as scrollable content
+    this.debugBox.setContent(filteredMessages.join("\n"))
+
+    // Auto-scroll to bottom to show latest messages
+    this.debugBox.setScrollPerc(100)
+
+    this.screen.render()
+  }
+
+  private toggleDebug(): void {
+    try {
+      this.showDebug = !this.showDebug
+
+      if (this.showDebug) {
+        this.debugBox.show()
+        const autoShowStatus = this.autoShowDebug ? " (auto-show ON)" : " (auto-show OFF)"
+        const debugFilterStatus = this.logLevel === "trace" ? " (showing all)" : this.logLevel === "debug" ? " (showing debug)" : " (info only)"
+        this.log(`Event log enabled (height: ${this.debugBoxHeight} lines, Ctrl+k/d to resize)${autoShowStatus}${debugFilterStatus}`, "info")
+        this.updateDebugBox()
+      } else {
+        this.debugBox.hide()
+      }
+
+      // Re-layout to adjust for the debug box
+      this.layoutWorkflows()
+      this.screen.render()
+    } catch (error) {
+      // Try to log the error if possible
+      if (this.logMessages) {
+        this.log(`Error toggling debug: ${error}`, "error")
+      }
+    }
+  }
+
+
+  private toggleAutoShowDebug(): void {
+    this.autoShowDebug = !this.autoShowDebug
+
+    // Save the preference
+    this.savePreferences()
+
+    // Show feedback about the setting change
+    if (this.autoShowDebug) {
+      this.log("Event log will auto-show on startup ✓ ('a' to toggle)", "event")
+    } else {
+      this.log("Event log will be hidden on startup ('a' to toggle)", "event")
+    }
+
+    // Update the title to reflect the new setting
+    if (this.showDebug) {
+      this.updateDebugBox()
+    }
+
+    // Don't change current visibility - this setting only affects startup behavior
+  }
+
+  private updateDebugInfo(info: any): void {
+    // Log state changes at trace level (most verbose)
+    this.log(`State: PRs=${info.prCount}, Workflows=${info.workflowCount}, Jobs=${info.jobsLoaded}`, "trace")
+  }
+
+  private resizeDebugBox(delta: number): void {
+    const newHeight = this.debugBoxHeight + delta
+
+    // Constrain within min/max bounds
+    if (newHeight < this.minDebugHeight || newHeight > this.maxDebugHeight) {
+      return
+    }
+
+    this.debugBoxHeight = newHeight
+    this.debugBox.height = newHeight
+
+    // Log the resize
+    this.log(`Event log resized to ${newHeight} lines (Ctrl+k/d to resize)`, "info")
+
+    // Save preferences
+    this.savePreferences()
+
+    // Re-layout to adjust for new height
+    this.layoutWorkflows()
+    this.screen.render()
+  }
+
+  private loadPreferences(): void {
+    try {
+      const prefsPath = path.join(os.homedir(), ".gh-hud-prefs.json")
+
+      // Store preference info for logging after UI is ready
+      this.pendingPrefsLog = [`Preferences file: ${prefsPath}`]
+
+      if (fs.existsSync(prefsPath)) {
+        const content = fs.readFileSync(prefsPath, "utf8")
+        if (content) {
+          const prefs = JSON.parse(content)
+          this.pendingPrefsLog.push(`Loaded preferences: ${JSON.stringify(prefs)}`)
+
+          if (prefs.debugBoxHeight !== undefined) {
+            const oldHeight = this.debugBoxHeight
+            this.debugBoxHeight = Math.max(
+              this.minDebugHeight,
+              Math.min(this.maxDebugHeight, prefs.debugBoxHeight)
+            )
+            this.pendingPrefsLog.push(`Debug box height: ${oldHeight} → ${this.debugBoxHeight}`)
+            // Apply the saved height to the debug box
+            if (this.debugBox) {
+              this.debugBox.height = this.debugBoxHeight
+            }
+          }
+
+          // Load auto-show preference
+          if (prefs.autoShowDebug !== undefined) {
+            this.autoShowDebug = prefs.autoShowDebug
+            // Apply the auto-show preference on startup
+            this.showDebug = prefs.autoShowDebug
+            this.pendingPrefsLog.push(`Auto-show debug: ${prefs.autoShowDebug ? 'ON' : 'OFF'}`)
+            this.pendingPrefsLog.push(`Debug box will be ${this.showDebug ? 'shown' : 'hidden'} on startup`)
+          }
+
+          // Load log level preference
+          if (prefs.logLevel !== undefined) {
+            this.logLevel = prefs.logLevel
+            this.pendingPrefsLog.push(`Log level: ${prefs.logLevel}`)
+          }
+        }
+      } else {
+        this.pendingPrefsLog.push("No preferences file found, using defaults")
+      }
+    } catch (error: any) {
+      // Store error for logging after UI is ready
+      this.pendingPrefsLog = [`Failed to load preferences: ${error.message}`]
+    }
+  }
+
+  private savePreferences(): void {
+    try {
+      const prefsPath = path.join(os.homedir(), ".gh-hud-prefs.json")
+
+      const prefs = {
+        debugBoxHeight: this.debugBoxHeight,
+        autoShowDebug: this.autoShowDebug,
+        logLevel: this.logLevel,
+        savedAt: new Date().toISOString()
+      }
+
+      fs.writeFileSync(prefsPath, JSON.stringify(prefs, null, 2))
+      this.log(`Preferences saved: height=${this.debugBoxHeight}, auto-show=${this.autoShowDebug}`, "debug")
+    } catch (error: any) {
+      this.log(`Failed to save preferences: ${error.message}`, "error")
+    }
+  }
+
+  // Track workflow status changes
+  private trackWorkflowChanges(newWorkflows: WorkflowRun[]): void {
+    const oldWorkflowMap = new Map(this.workflows.map(w => [w.id, w]))
+
+    for (const workflow of newWorkflows) {
+      const oldWorkflow = oldWorkflowMap.get(workflow.id)
+
+      if (!oldWorkflow) {
+        // New workflow appeared
+        this.log(`New workflow: ${workflow.repository.owner}/${workflow.repository.name} - ${workflow.workflowName} #${workflow.runNumber}`, "event")
+      } else if (oldWorkflow.status !== workflow.status) {
+        // Status changed
+        const statusIcon = this.getStatusIcon(workflow.status, workflow.conclusion)
+        this.log(`Status change: ${workflow.workflowName} #${workflow.runNumber}: ${oldWorkflow.status} → ${workflow.status} ${statusIcon}`, "event")
+      } else if (oldWorkflow.conclusion !== workflow.conclusion && workflow.conclusion) {
+        // Conclusion changed
+        this.log(`Completed: ${workflow.workflowName} #${workflow.runNumber}: ${workflow.conclusion}`, "event")
+      }
+    }
+
+    // Check for removed workflows
+    for (const oldWorkflow of this.workflows) {
+      if (!newWorkflows.find(w => w.id === oldWorkflow.id)) {
+        this.log(`Removed: ${oldWorkflow.workflowName} #${oldWorkflow.runNumber}`, "event")
+      }
     }
   }
 }

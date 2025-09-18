@@ -22,6 +22,7 @@ program
   .option("-o, --org <organizations...>", "Organizations to monitor")
   .option("-i, --interval <seconds>", "Refresh interval in seconds", "5")
   .option("-s, --status <statuses...>", "Filter by status (queued, in_progress, completed)")
+  .option("-p, --show-prs", "Show open pull requests in header")
   .action(async (options) => {
     const app = new App()
 
@@ -31,15 +32,16 @@ program
         config: options.config,
         organizations: options.org,
         interval: parseInt(options.interval, 10),
+        showPRs: options.showPrs,
       })
     } catch (error) {
-      console.error("Failed to initialize app:", error)
+      // Write to stderr in a way that won't interfere with the UI
+      process.stderr.write(`Failed to initialize app: ${error}\n`)
       process.exit(1)
     }
 
     // Handle graceful shutdown
     const cleanup = () => {
-      console.error("\nShutting down...")
       app.stop()
       process.exit(0)
     }
@@ -50,8 +52,8 @@ program
     process.on("SIGUSR2", cleanup)
 
     // Handle uncaught exceptions
-    process.on("uncaughtException", (error) => {
-      console.error("Uncaught exception:", error)
+    process.on("uncaughtException", (_error) => {
+      // Don't output to console as it interferes with UI
       cleanup()
     })
   })
@@ -63,6 +65,7 @@ program
   .option("-o, --org <organizations...>", "Organizations to monitor")
   .option("-i, --interval <seconds>", "Refresh interval in seconds", "5")
   .option("-s, --status <statuses...>", "Filter by status (queued, in_progress, completed)")
+  .option("-p, --show-prs", "Show open pull requests in header")
   .action(async (options) => {
     const app = new App()
 
@@ -72,15 +75,16 @@ program
         config: options.config,
         organizations: options.org,
         interval: parseInt(options.interval, 10),
+        showPRs: options.showPrs,
       })
     } catch (error) {
-      console.error("Failed to initialize app:", error)
+      // Write to stderr in a way that won't interfere with the UI
+      process.stderr.write(`Failed to initialize app: ${error}\n`)
       process.exit(1)
     }
 
     // Handle graceful shutdown
     const cleanup = () => {
-      console.error("\nShutting down...")
       app.stop()
       process.exit(0)
     }
@@ -91,8 +95,8 @@ program
     process.on("SIGUSR2", cleanup)
 
     // Handle uncaught exceptions
-    process.on("uncaughtException", (error) => {
-      console.error("Uncaught exception:", error)
+    process.on("uncaughtException", (_error) => {
+      // Don't output to console as it interferes with UI
       cleanup()
     })
   })

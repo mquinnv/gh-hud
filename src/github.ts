@@ -1,5 +1,5 @@
 import { execa } from "execa"
-import type { Repository, WorkflowJob, WorkflowRun } from "./types.js"
+import type { PullRequest, Repository, WorkflowJob, WorkflowRun } from "./types.js"
 
 export class GitHubService {
   private cache: Map<string, { data: any; timestamp: number }> = new Map()
@@ -159,5 +159,76 @@ export class GitHubService {
 
   clearCache(): void {
     this.cache.clear()
+  }
+
+  async listPullRequests(repo: string, limit = 20): Promise<PullRequest[]> {
+    const cacheKey = `prs:${repo}`
+    const cached = this.getFromCache<PullRequest[]>(cacheKey)
+    if (cached) return cached
+
+    try {
+      const { stdout } = await execa(
+        "gh",
+        [
+          "pr",
+          "list",
+          "--repo",
+          repo,
+          "--state",
+          "open",
+          "--limit",
+          limit.toString(),
+          "--json",
+          "id,number,title,state,isDraft,headRefName,baseRefName,url,createdAt,updatedAt,author,statusCheckRollup,reviewDecision,mergeable",
+        ],
+        { timeout: 10000 },
+      )
+
+      const prs = JSON.parse(stdout)
+      const [owner, name] = repo.split("/")
+
+      const pullRequests: PullRequest[] = prs.map((pr: any) => ({
+        id: pr.id,
+        number: pr.number,
+        title: pr.title,
+        state: pr.state?.toLowerCase() || "open",
+        draft: pr.isDraft || false,
+        user: {
+          login: pr.author?.login || "unknown",
+        },
+        headRefName: pr.headRefName,
+        baseRefName: pr.baseRefName,
+        url: pr.url,
+        createdAt: pr.createdAt,
+        updatedAt: pr.updatedAt,
+        repository: { owner, name },
+        statusCheckRollup: pr.statusCheckRollup ? { state: pr.statusCheckRollup.state } : undefined,
+        reviewDecision: pr.reviewDecision,
+        mergeable: pr.mergeable,
+        isDraft: pr.isDraft,
+      }))
+
+      this.setCache(cacheKey, pullRequests)
+      return pullRequests
+    } catch (error) {
+      // Check if it's a rate limit error
+      if (error instanceof Error && error.message?.includes("API rate limit exceeded")) {
+        throw new Error("GitHub API rate limit exceeded. Please wait before trying again.")
+      }
+      // Return empty array on error (silently fail)
+      return []
+    }
+  }
+
+  async getAllPullRequests(repos: string[]): Promise<PullRequest[]> {
+    const allPRs: PullRequest[] = []
+
+    for (const repo of repos) {
+      const prs = await this.listPullRequests(repo)
+      allPRs.push(...prs)
+    }
+
+    // Sort by most recently updated
+    return allPRs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
   }
 }

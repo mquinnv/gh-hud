@@ -3,7 +3,7 @@ import { promisify } from "util"
 import { ConfigManager } from "./config.js"
 import { Dashboard } from "./dashboard.js"
 import { GitHubService } from "./github.js"
-import type { WorkflowJob, WorkflowRun } from "./types.js"
+import type { PullRequest, WorkflowJob, WorkflowRun } from "./types.js"
 
 const execAsync = promisify(exec)
 
@@ -17,6 +17,8 @@ export class App {
   private isRefreshing = false
   private watchedWorkflows: Set<number> = new Set() // Track workflows we've been watching
   private completedWorkflows: Map<number, WorkflowRun> = new Map() // Keep completed workflows until dismissed
+  private showPRs = false
+  private pullRequests: PullRequest[] = []
 
   constructor() {
     this.githubService = new GitHubService()
@@ -29,6 +31,7 @@ export class App {
     repositories?: string[]
     organizations?: string[]
     interval?: number
+    showPRs?: boolean
   }): Promise<void> {
     // Load configuration
     await this.configManager.loadConfig(args.config)
@@ -44,8 +47,11 @@ export class App {
       this.configManager.updateFromArgs({ refreshInterval: args.interval * 1000 })
     }
 
+    // Store the showPRs flag
+    this.showPRs = args.showPRs || false
+
     // Build repository list
-    this.repositories = await this.configManager.buildRepositoryList(this.githubService)
+    this.repositories = await this.configManager.buildRepositoryList(this.githubService, this.dashboard)
 
     if (this.repositories.length === 0) {
       // Will show empty state in UI
@@ -106,6 +112,9 @@ export class App {
   }
 
   private async performRefresh(_isManual: boolean = false): Promise<void> {
+    // Don't refresh if a modal is open
+    if (this.dashboard.isModalOpen()) return
+
     if (this.isRefreshing) return
     this.isRefreshing = true
 
@@ -115,6 +124,11 @@ export class App {
     try {
       // Fetch all recent workflows
       const allRuns = await this.githubService.getAllRecentWorkflows(this.repositories)
+
+      // Fetch PRs if requested
+      if (this.showPRs) {
+        this.pullRequests = await this.githubService.getAllPullRequests(this.repositories)
+      }
 
       // Update watched and completed trackers
       for (const run of allRuns) {
@@ -150,13 +164,15 @@ export class App {
       })
 
       // Update dashboard
-      this.dashboard.updateWorkflows(workflows, this.jobs)
+      this.dashboard.updateWorkflows(workflows, this.jobs, this.pullRequests)
     } catch (error) {
-      // Show error in dashboard if first load fails
-      console.error("Error in refresh():", error)
+      // Show error in dashboard
+      this.dashboard.log(`Error refreshing: ${error}`, "error")
       this.dashboard.showError(`Failed to load workflows: ${error}`)
     } finally {
       this.isRefreshing = false
+      // Stop the refresh animation
+      this.dashboard.stopRefreshAnimation()
     }
   }
 
@@ -202,7 +218,7 @@ export class App {
     })
 
     // Update dashboard with filtered workflows immediately
-    this.dashboard.updateWorkflows(filteredWorkflows, this.jobs)
+    this.dashboard.updateWorkflows(filteredWorkflows, this.jobs, this.pullRequests)
   }
 
   stop(): void {

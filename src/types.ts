@@ -76,9 +76,36 @@ export interface Config {
   showCompletedFor?: number // minutes to show completed workflows
 }
 
+export interface PullRequest {
+  id: number
+  number: number
+  title: string
+  state: "open" | "closed"
+  draft: boolean
+  user: {
+    login: string
+  }
+  headRefName: string
+  baseRefName: string
+  url: string
+  createdAt: string
+  updatedAt: string
+  repository: {
+    owner: string
+    name: string
+  }
+  statusCheckRollup?: {
+    state: "SUCCESS" | "FAILURE" | "PENDING" | "ERROR" | "EXPECTED"
+  }
+  reviewDecision?: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED"
+  mergeable?: "MERGEABLE" | "CONFLICTING" | "UNKNOWN"
+  isDraft?: boolean
+}
+
 export interface DashboardState {
   workflows: Map<string, WorkflowRun>
   jobs: Map<string, WorkflowJob[]>
+  pullRequests?: PullRequest[]
   lastUpdate: Date
   error?: string
 }
