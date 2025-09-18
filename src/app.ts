@@ -51,7 +51,10 @@ export class App {
     this.showPRs = args.showPRs || false
 
     // Build repository list
-    this.repositories = await this.configManager.buildRepositoryList(this.githubService, this.dashboard)
+    this.repositories = await this.configManager.buildRepositoryList(
+      this.githubService,
+      this.dashboard,
+    )
 
     if (this.repositories.length === 0) {
       // Will show empty state in UI

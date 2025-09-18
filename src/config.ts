@@ -2,8 +2,8 @@ import { execa } from "execa"
 import { readFile } from "fs/promises"
 import { homedir } from "os"
 import { join } from "path"
-import type { Config } from "./types.js"
 import type { Dashboard } from "./dashboard.js"
+import type { Config } from "./types.js"
 
 const DEFAULT_CONFIG: Config = {
   repositories: [],

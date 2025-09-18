@@ -1,7 +1,7 @@
 import blessed from "blessed"
 import * as fs from "fs"
-import * as path from "path"
 import * as os from "os"
+import * as path from "path"
 import type { PullRequest, WorkflowJob, WorkflowRun } from "./types.js"
 
 export class Dashboard {
@@ -23,7 +23,12 @@ export class Dashboard {
   private showDebug = false // Hidden by default, press F9 to show
   private autoShowDebug = false // Whether to show debug log on startup
   private logLevel: "info" | "debug" | "trace" = "info" // Filter level for event log
-  private logMessages: Array<{message: string, type: string, timestamp: string, formatted: string}> = []
+  private logMessages: Array<{
+    message: string
+    type: string
+    timestamp: string
+    formatted: string
+  }> = []
   private maxLogMessages = 100 // Keep last 100 messages
   private debugBoxHeight = 5 // Default height, can be resized
   private minDebugHeight = 3
@@ -46,15 +51,15 @@ export class Dashboard {
     // Disable mouse tracking completely
     if (process.stdout.isTTY) {
       // Disable mouse reporting sequences
-      process.stdout.write('\x1b[?1000l') // Disable X10 mouse
-      process.stdout.write('\x1b[?1002l') // Disable button event mouse
-      process.stdout.write('\x1b[?1003l') // Disable any-event mouse
-      process.stdout.write('\x1b[?1006l') // Disable SGR mouse
+      process.stdout.write("\x1b[?1000l") // Disable X10 mouse
+      process.stdout.write("\x1b[?1002l") // Disable button event mouse
+      process.stdout.write("\x1b[?1003l") // Disable any-event mouse
+      process.stdout.write("\x1b[?1006l") // Disable SGR mouse
     }
 
     // Override TERM environment variable to force a simpler terminal
     const originalTerm = process.env.TERM
-    process.env.TERM = 'xterm-color' // Use xterm-color which doesn't have Setulc
+    process.env.TERM = "xterm-color" // Use xterm-color which doesn't have Setulc
 
     this.screen = blessed.screen({
       smartCSR: true,
@@ -66,7 +71,7 @@ export class Dashboard {
       mouse: false, // Explicitly disable mouse support
       input: process.stdin,
       output: process.stdout,
-      terminal: 'xterm-color', // Force xterm-color to avoid Setulc
+      terminal: "xterm-color", // Force xterm-color to avoid Setulc
       forceUnicode: true,
       fastCSR: true, // Use fast CSR to reduce flickering
       useBCE: false, // Don't use background color erase which can cause flicker
@@ -211,7 +216,7 @@ export class Dashboard {
       // Wrap the _write method which is what actually outputs
       const original_write = program._write?.bind(program) || program.write?.bind(program)
       if (original_write) {
-        program._write = function(text: any) {
+        program._write = (text: any) => {
           try {
             return original_write(text)
           } catch (error: any) {
@@ -225,7 +230,7 @@ export class Dashboard {
       // Also wrap the main write method
       const originalWrite = program.write?.bind(program)
       if (originalWrite) {
-        program.write = function(text: any) {
+        program.write = (text: any) => {
           try {
             return originalWrite(text)
           } catch (error: any) {
@@ -410,47 +415,47 @@ export class Dashboard {
       let newRow = currentCoords.row
       let newCol = currentCoords.col
 
-    switch (direction) {
-      case "up":
-        newRow = currentCoords.row - 1
-        // If at top row, don't wrap - stay in place
-        if (newRow < 0) {
-          return
-        }
-        break
+      switch (direction) {
+        case "up":
+          newRow = currentCoords.row - 1
+          // If at top row, don't wrap - stay in place
+          if (newRow < 0) {
+            return
+          }
+          break
 
-      case "down":
-        newRow = currentCoords.row + 1
-        // If at bottom row, don't wrap - stay in place
-        if (newRow >= this.rows) {
-          return
-        }
-        break
+        case "down":
+          newRow = currentCoords.row + 1
+          // If at bottom row, don't wrap - stay in place
+          if (newRow >= this.rows) {
+            return
+          }
+          break
 
-      case "left":
-        // If only one column, can't move left
-        if (this.cols <= 1) {
-          return
-        }
-        newCol = currentCoords.col - 1
-        // If at leftmost column, don't wrap - stay in place
-        if (newCol < 0) {
-          return
-        }
-        break
+        case "left":
+          // If only one column, can't move left
+          if (this.cols <= 1) {
+            return
+          }
+          newCol = currentCoords.col - 1
+          // If at leftmost column, don't wrap - stay in place
+          if (newCol < 0) {
+            return
+          }
+          break
 
-      case "right":
-        // If only one column, can't move right
-        if (this.cols <= 1) {
-          return
-        }
-        newCol = currentCoords.col + 1
-        // If at rightmost column, don't wrap - stay in place
-        if (newCol >= this.cols) {
-          return
-        }
-        break
-    }
+        case "right":
+          // If only one column, can't move right
+          if (this.cols <= 1) {
+            return
+          }
+          newCol = currentCoords.col + 1
+          // If at rightmost column, don't wrap - stay in place
+          if (newCol >= this.cols) {
+            return
+          }
+          break
+      }
 
       // Check if the new position is valid (has a workflow)
       if (this.isValidGridPosition(newRow, newCol)) {
@@ -682,7 +687,7 @@ Press '?', '/', or 'Esc' to close...`,
 
     // Log any pending preference messages
     if (this.pendingPrefsLog.length > 0) {
-      this.pendingPrefsLog.forEach(msg => this.log(msg, "debug"))
+      this.pendingPrefsLog.forEach((msg) => this.log(msg, "debug"))
       this.pendingPrefsLog = []
     }
 
@@ -842,101 +847,101 @@ Press '?', '/', or 'Esc' to close...`,
       // Build new grid before destroying old one (double-buffering)
       const newGrid: blessed.Widgets.BoxElement[] = []
 
-    // Calculate available height (account for status bar, debug box, and PR header if shown)
-    const debugHeight = this.showDebug ? this.debugBoxHeight : 0
-    const prHeaderHeight = this.showPRs ? 5 : 0
-    const screenHeight = (this.screen.height as number) - 4 - debugHeight - prHeaderHeight // Status bar is now 4 high
-    const screenWidth = this.screen.width as number
-    const count = this.workflows.length
-    const topOffset = prHeaderHeight // Offset for PR header
+      // Calculate available height (account for status bar, debug box, and PR header if shown)
+      const debugHeight = this.showDebug ? this.debugBoxHeight : 0
+      const prHeaderHeight = this.showPRs ? 5 : 0
+      const screenHeight = (this.screen.height as number) - 4 - debugHeight - prHeaderHeight // Status bar is now 4 high
+      const screenWidth = this.screen.width as number
+      const count = this.workflows.length
+      const topOffset = prHeaderHeight // Offset for PR header
 
-    if (count === 0) {
-      // Show empty state
-      const emptyBox = blessed.box({
-        parent: this.screen,
-        top: topOffset,
-        left: 0,
-        width: "100%",
-        height: screenHeight,
-        content: `{center}No running workflows found{/center}
+      if (count === 0) {
+        // Show empty state
+        const emptyBox = blessed.box({
+          parent: this.screen,
+          top: topOffset,
+          left: 0,
+          width: "100%",
+          height: screenHeight,
+          content: `{center}No running workflows found{/center}
 
 {center}Monitoring for in-progress and queued workflows...{/center}
 {center}Press 'r' to refresh or 'q' to quit{/center}
 
 {center}Completed workflows will be shown until dismissed{/center}
 {center}To see activity, trigger a workflow in your repositories{/center}`,
-        tags: true,
-        border: {
-          type: "line",
-        },
-        style: {
-          fg: "gray",
+          tags: true,
           border: {
-            fg: "#f0f0f0",
+            type: "line",
           },
-        },
-      })
-      newGrid.push(emptyBox)
+          style: {
+            fg: "gray",
+            border: {
+              fg: "#f0f0f0",
+            },
+          },
+        })
+        newGrid.push(emptyBox)
 
-      // Now swap grids atomically
-      this.grid.forEach((box) => box.destroy())
+        // Now swap grids atomically
+        this.grid.forEach((box) => box.destroy())
+        this.grid = newGrid
+        return
+      }
+
+      // Calculate grid layout - use full width for single card
+      this.cols = count === 1 ? 1 : Math.min(Math.ceil(Math.sqrt(count)), 3)
+      this.rows = Math.ceil(count / this.cols)
+
+      const boxWidth = Math.floor(screenWidth / this.cols)
+      const boxHeight = Math.floor(screenHeight / this.rows)
+
+      // Store box width for use in formatting
+      this.currentBoxWidth = boxWidth
+
+      // Create grid of boxes
+      for (let i = 0; i < count; i++) {
+        const row = Math.floor(i / this.cols)
+        const col = i % this.cols
+        const workflow = this.workflows[i]
+        const borderColor = workflow
+          ? this.getBorderColor(workflow, i === this.selectedIndex)
+          : "#f0f0f0"
+
+        const box = blessed.box({
+          parent: this.screen,
+          top: topOffset + row * boxHeight,
+          left: col * boxWidth,
+          width: boxWidth,
+          height: boxHeight,
+          tags: true,
+          border: {
+            type: "line",
+          },
+          style: {
+            fg: "white",
+            border: {
+              fg: borderColor,
+            },
+          },
+          scrollable: true,
+          alwaysScroll: true,
+          keys: true,
+          vi: false,
+        })
+
+        newGrid.push(box)
+      }
+
+      // Now swap grids atomically - destroy old boxes AFTER creating new ones
+      const oldGrid = this.grid
       this.grid = newGrid
-      return
-    }
 
-    // Calculate grid layout - use full width for single card
-    this.cols = count === 1 ? 1 : Math.min(Math.ceil(Math.sqrt(count)), 3)
-    this.rows = Math.ceil(count / this.cols)
+      // Ensure selection highlighting is applied after creating all boxes
+      this.highlightSelected()
 
-    const boxWidth = Math.floor(screenWidth / this.cols)
-    const boxHeight = Math.floor(screenHeight / this.rows)
-
-    // Store box width for use in formatting
-    this.currentBoxWidth = boxWidth
-
-    // Create grid of boxes
-    for (let i = 0; i < count; i++) {
-      const row = Math.floor(i / this.cols)
-      const col = i % this.cols
-      const workflow = this.workflows[i]
-      const borderColor = workflow
-        ? this.getBorderColor(workflow, i === this.selectedIndex)
-        : "#f0f0f0"
-
-      const box = blessed.box({
-        parent: this.screen,
-        top: topOffset + row * boxHeight,
-        left: col * boxWidth,
-        width: boxWidth,
-        height: boxHeight,
-        tags: true,
-        border: {
-          type: "line",
-        },
-        style: {
-          fg: "white",
-          border: {
-            fg: borderColor,
-          },
-        },
-        scrollable: true,
-        alwaysScroll: true,
-        keys: true,
-        vi: false,
-      })
-
-      newGrid.push(box)
-    }
-
-    // Now swap grids atomically - destroy old boxes AFTER creating new ones
-    const oldGrid = this.grid
-    this.grid = newGrid
-
-    // Ensure selection highlighting is applied after creating all boxes
-    this.highlightSelected()
-
-    // Destroy old boxes after new ones are in place
-    oldGrid.forEach((box) => box.destroy())
+      // Destroy old boxes after new ones are in place
+      oldGrid.forEach((box) => box.destroy())
     } finally {
       this.layoutInProgress = false
     }
@@ -1258,8 +1263,9 @@ Press '?', '/', or 'Esc' to close...`,
     // Animated refresh indicator - using braille spinner for smoothness
     // Always reserve space for the spinner to prevent text jumping
     const refreshFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-    const refreshIndicator = this.refreshAnimationTimer ?
-      `{yellow-fg}${refreshFrames[this.refreshAnimationFrame % refreshFrames.length]}{/}` : " " // Space when not spinning
+    const refreshIndicator = this.refreshAnimationTimer
+      ? `{yellow-fg}${refreshFrames[this.refreshAnimationFrame % refreshFrames.length]}{/}`
+      : " " // Space when not spinning
 
     // Use last refresh time if available
     const updateTime = this.lastRefreshTime || new Date()
@@ -1281,21 +1287,25 @@ Press '?', '/', or 'Esc' to close...`,
       "Enter: open",
       "d/D: dismiss",
       "F9: log",
-      "F10: level"
+      "F10: level",
     ]
     const line2 = shortcuts.join(" | ")
 
     // Only update if content actually changed (except for spinner)
-    const line1WithoutSpinner = line1.replace(/^.*?\} /, '') // Remove spinner part
-    const lastLine1WithoutSpinner = this.lastStatusLine1.replace(/^.*?\} /, '')
+    const line1WithoutSpinner = line1.replace(/^.*?\} /, "") // Remove spinner part
+    const lastLine1WithoutSpinner = this.lastStatusLine1.replace(/^.*?\} /, "")
 
     if (line1WithoutSpinner !== lastLine1WithoutSpinner || line2 !== this.lastStatusLine2) {
-      this.statusBox.setContent(`{center}${line1}{/center}\n{center}{gray-fg}${line2}{/gray-fg}{/center}`)
+      this.statusBox.setContent(
+        `{center}${line1}{/center}\n{center}{gray-fg}${line2}{/gray-fg}{/center}`,
+      )
       this.lastStatusLine1 = line1
       this.lastStatusLine2 = line2
     } else if (this.refreshAnimationTimer) {
       // Just update the spinner portion without re-rendering everything
-      this.statusBox.setContent(`{center}${line1}{/center}\n{center}{gray-fg}${line2}{/gray-fg}{/center}`)
+      this.statusBox.setContent(
+        `{center}${line1}{/center}\n{center}{gray-fg}${line2}{/gray-fg}{/center}`,
+      )
     }
   }
 
@@ -1354,10 +1364,10 @@ Press '?', '/', or 'Esc' to close...`,
 
     // Disable mouse tracking before exit
     if (process.stdout.isTTY) {
-      process.stdout.write('\x1b[?1000l')
-      process.stdout.write('\x1b[?1002l')
-      process.stdout.write('\x1b[?1003l')
-      process.stdout.write('\x1b[?1006l')
+      process.stdout.write("\x1b[?1000l")
+      process.stdout.write("\x1b[?1002l")
+      process.stdout.write("\x1b[?1003l")
+      process.stdout.write("\x1b[?1006l")
     }
 
     // Emit exit event for the app to handle
@@ -1427,10 +1437,10 @@ Press '?', '/', or 'Esc' to close...`,
 
     // Ensure mouse tracking is disabled on exit
     if (process.stdout.isTTY) {
-      process.stdout.write('\x1b[?1000l')
-      process.stdout.write('\x1b[?1002l')
-      process.stdout.write('\x1b[?1003l')
-      process.stdout.write('\x1b[?1006l')
+      process.stdout.write("\x1b[?1000l")
+      process.stdout.write("\x1b[?1002l")
+      process.stdout.write("\x1b[?1003l")
+      process.stdout.write("\x1b[?1006l")
     }
 
     // Destroy the blessed screen
@@ -1582,7 +1592,7 @@ Press '?', '/', or 'Esc' to close...`,
     const color = typeColors[type as keyof typeof typeColors] || "{white-fg}"
     const formattedMessage = `${color}[${timestamp}] ${message}{/}`
 
-    this.logMessages.push({message, type, timestamp, formatted: formattedMessage})
+    this.logMessages.push({ message, type, timestamp, formatted: formattedMessage })
 
     // Keep only the last N messages
     if (this.logMessages.length > this.maxLogMessages) {
@@ -1606,16 +1616,16 @@ Press '?', '/', or 'Esc' to close...`,
 
     // Define log level hierarchy
     const levelHierarchy = {
-      info: 0,    // Show only info, event, and error
-      debug: 1,   // Also show debug
-      trace: 2    // Show everything including trace
+      info: 0, // Show only info, event, and error
+      debug: 1, // Also show debug
+      trace: 2, // Show everything including trace
     }
 
     const currentLevelValue = levelHierarchy[this.logLevel]
 
     // Filter messages based on log level
     const filteredMessages = this.logMessages
-      .filter(msg => {
+      .filter((msg) => {
         // Always show info, event, and error
         if (msg.type === "info" || msg.type === "event" || msg.type === "error") return true
         // Show debug if level is debug or higher
@@ -1624,18 +1634,23 @@ Press '?', '/', or 'Esc' to close...`,
         if (msg.type === "trace") return currentLevelValue >= levelHierarchy.trace
         return true
       })
-      .map(msg => msg.formatted)
+      .map((msg) => msg.formatted)
 
     // Create colored log level indicator for the title
-    const levelIndicator = this.logLevel === "info" ? "{white-fg}[INFO]{/}" :
-                          this.logLevel === "debug" ? "{cyan-fg}[DEBUG]{/}" :
-                          "{gray-fg}[TRACE]{/}"
+    const levelIndicator =
+      this.logLevel === "info"
+        ? "{white-fg}[INFO]{/}"
+        : this.logLevel === "debug"
+          ? "{cyan-fg}[DEBUG]{/}"
+          : "{gray-fg}[TRACE]{/}"
 
     // Auto-show indicator - clear ON/OFF text
     const autoShowStatus = this.autoShowDebug ? "{green-fg}ON{/}" : "{gray-fg}OFF{/}"
 
     // Update the label to show colored log level and auto-show status
-    this.debugBox.setLabel(` Event Log ${levelIndicator} (F9: hide, F10: cycle level, a: auto-open ${autoShowStatus}) `)
+    this.debugBox.setLabel(
+      ` Event Log ${levelIndicator} (F9: hide, F10: cycle level, a: auto-open ${autoShowStatus}) `,
+    )
 
     // Set filtered messages as scrollable content
     this.debugBox.setContent(filteredMessages.join("\n"))
@@ -1653,8 +1668,16 @@ Press '?', '/', or 'Esc' to close...`,
       if (this.showDebug) {
         this.debugBox.show()
         const autoShowStatus = this.autoShowDebug ? " (auto-show ON)" : " (auto-show OFF)"
-        const debugFilterStatus = this.logLevel === "trace" ? " (showing all)" : this.logLevel === "debug" ? " (showing debug)" : " (info only)"
-        this.log(`Event log enabled (height: ${this.debugBoxHeight} lines, Ctrl+k/d to resize)${autoShowStatus}${debugFilterStatus}`, "info")
+        const debugFilterStatus =
+          this.logLevel === "trace"
+            ? " (showing all)"
+            : this.logLevel === "debug"
+              ? " (showing debug)"
+              : " (info only)"
+        this.log(
+          `Event log enabled (height: ${this.debugBoxHeight} lines, Ctrl+k/d to resize)${autoShowStatus}${debugFilterStatus}`,
+          "info",
+        )
         this.updateDebugBox()
       } else {
         this.debugBox.hide()
@@ -1670,7 +1693,6 @@ Press '?', '/', or 'Esc' to close...`,
       }
     }
   }
-
 
   private toggleAutoShowDebug(): void {
     this.autoShowDebug = !this.autoShowDebug
@@ -1695,7 +1717,10 @@ Press '?', '/', or 'Esc' to close...`,
 
   private updateDebugInfo(info: any): void {
     // Log state changes at trace level (most verbose)
-    this.log(`State: PRs=${info.prCount}, Workflows=${info.workflowCount}, Jobs=${info.jobsLoaded}`, "trace")
+    this.log(
+      `State: PRs=${info.prCount}, Workflows=${info.workflowCount}, Jobs=${info.jobsLoaded}`,
+      "trace",
+    )
   }
 
   private resizeDebugBox(delta: number): void {
@@ -1737,7 +1762,7 @@ Press '?', '/', or 'Esc' to close...`,
             const oldHeight = this.debugBoxHeight
             this.debugBoxHeight = Math.max(
               this.minDebugHeight,
-              Math.min(this.maxDebugHeight, prefs.debugBoxHeight)
+              Math.min(this.maxDebugHeight, prefs.debugBoxHeight),
             )
             this.pendingPrefsLog.push(`Debug box height: ${oldHeight} → ${this.debugBoxHeight}`)
             // Apply the saved height to the debug box
@@ -1751,8 +1776,10 @@ Press '?', '/', or 'Esc' to close...`,
             this.autoShowDebug = prefs.autoShowDebug
             // Apply the auto-show preference on startup
             this.showDebug = prefs.autoShowDebug
-            this.pendingPrefsLog.push(`Auto-show debug: ${prefs.autoShowDebug ? 'ON' : 'OFF'}`)
-            this.pendingPrefsLog.push(`Debug box will be ${this.showDebug ? 'shown' : 'hidden'} on startup`)
+            this.pendingPrefsLog.push(`Auto-show debug: ${prefs.autoShowDebug ? "ON" : "OFF"}`)
+            this.pendingPrefsLog.push(
+              `Debug box will be ${this.showDebug ? "shown" : "hidden"} on startup`,
+            )
           }
 
           // Load log level preference
@@ -1778,11 +1805,14 @@ Press '?', '/', or 'Esc' to close...`,
         debugBoxHeight: this.debugBoxHeight,
         autoShowDebug: this.autoShowDebug,
         logLevel: this.logLevel,
-        savedAt: new Date().toISOString()
+        savedAt: new Date().toISOString(),
       }
 
       fs.writeFileSync(prefsPath, JSON.stringify(prefs, null, 2))
-      this.log(`Preferences saved: height=${this.debugBoxHeight}, auto-show=${this.autoShowDebug}`, "debug")
+      this.log(
+        `Preferences saved: height=${this.debugBoxHeight}, auto-show=${this.autoShowDebug}`,
+        "debug",
+      )
     } catch (error: any) {
       this.log(`Failed to save preferences: ${error.message}`, "error")
     }
@@ -1790,27 +1820,36 @@ Press '?', '/', or 'Esc' to close...`,
 
   // Track workflow status changes
   private trackWorkflowChanges(newWorkflows: WorkflowRun[]): void {
-    const oldWorkflowMap = new Map(this.workflows.map(w => [w.id, w]))
+    const oldWorkflowMap = new Map(this.workflows.map((w) => [w.id, w]))
 
     for (const workflow of newWorkflows) {
       const oldWorkflow = oldWorkflowMap.get(workflow.id)
 
       if (!oldWorkflow) {
         // New workflow appeared
-        this.log(`New workflow: ${workflow.repository.owner}/${workflow.repository.name} - ${workflow.workflowName} #${workflow.runNumber}`, "event")
+        this.log(
+          `New workflow: ${workflow.repository.owner}/${workflow.repository.name} - ${workflow.workflowName} #${workflow.runNumber}`,
+          "event",
+        )
       } else if (oldWorkflow.status !== workflow.status) {
         // Status changed
         const statusIcon = this.getStatusIcon(workflow.status, workflow.conclusion)
-        this.log(`Status change: ${workflow.workflowName} #${workflow.runNumber}: ${oldWorkflow.status} → ${workflow.status} ${statusIcon}`, "event")
+        this.log(
+          `Status change: ${workflow.workflowName} #${workflow.runNumber}: ${oldWorkflow.status} → ${workflow.status} ${statusIcon}`,
+          "event",
+        )
       } else if (oldWorkflow.conclusion !== workflow.conclusion && workflow.conclusion) {
         // Conclusion changed
-        this.log(`Completed: ${workflow.workflowName} #${workflow.runNumber}: ${workflow.conclusion}`, "event")
+        this.log(
+          `Completed: ${workflow.workflowName} #${workflow.runNumber}: ${workflow.conclusion}`,
+          "event",
+        )
       }
     }
 
     // Check for removed workflows
     for (const oldWorkflow of this.workflows) {
-      if (!newWorkflows.find(w => w.id === oldWorkflow.id)) {
+      if (!newWorkflows.find((w) => w.id === oldWorkflow.id)) {
         this.log(`Removed: ${oldWorkflow.workflowName} #${oldWorkflow.runNumber}`, "event")
       }
     }
