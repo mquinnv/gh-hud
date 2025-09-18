@@ -55,7 +55,7 @@ export class ConfigManager {
         const userConfig = JSON.parse(content)
         this.config = { ...DEFAULT_CONFIG, ...userConfig }
         break
-      } catch (error) {
+      } catch (_error) {
         // Config file doesn't exist or is invalid, continue to next
       }
     }
@@ -116,7 +116,7 @@ export class ConfigManager {
           repos.add(repo.fullName)
         }
         if (dashboard) dashboard.log(`Found ${orgRepos.length} repos for ${org}`, "debug")
-      } catch (error) {
+      } catch (_error) {
         if (dashboard) dashboard.log(`Failed to fetch repos for org ${org}`, "error")
         // Continue with other orgs
       }

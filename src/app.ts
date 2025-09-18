@@ -98,7 +98,7 @@ export class App {
         }
 
         await execAsync(command)
-      } catch (error) {
+      } catch (_error) {
         // Silently fail
       }
     })

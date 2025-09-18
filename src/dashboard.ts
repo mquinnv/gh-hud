@@ -517,7 +517,7 @@ export class Dashboard {
       // Only update the two boxes that changed (old selected and new selected)
       if (this.lastSelectedIndex >= 0 && this.lastSelectedIndex < this.grid.length) {
         const oldBox = this.grid[this.lastSelectedIndex]
-        if (oldBox && oldBox.style && oldBox.style.border) {
+        if (oldBox?.style?.border) {
           const workflow = this.workflows[this.lastSelectedIndex]
           oldBox.style.border.fg = workflow ? this.getBorderColor(workflow, false) : "#f0f0f0"
         }
@@ -534,7 +534,7 @@ export class Dashboard {
       // Update new selected box
       if (this.selectedIndex >= 0 && this.selectedIndex < this.grid.length) {
         const newBox = this.grid[this.selectedIndex]
-        if (newBox && newBox.style && newBox.style.border) {
+        if (newBox?.style?.border) {
           newBox.style.border.fg = "cyan"
         }
 
@@ -657,7 +657,7 @@ Press '?', '/', or 'Esc' to close...`,
         try {
           this.helpBox.setFront()
           this.screen.render()
-        } catch (e) {
+        } catch (_e) {
           process.stderr.write(`\nCritical help render failure\n`)
         }
       }
@@ -673,7 +673,7 @@ Press '?', '/', or 'Esc' to close...`,
       // Try a safe render
       try {
         this.scheduleRender()
-      } catch (error: any) {
+      } catch (_error: any) {
         // Ignore render errors when closing help
         process.stderr.write(`\nIgnoring help close render error\n`)
       }
@@ -784,7 +784,7 @@ Press '?', '/', or 'Esc' to close...`,
         // Try a simpler render as fallback
         try {
           this.screen.render()
-        } catch (fallbackError) {
+        } catch (_fallbackError) {
           process.stderr.write(`\nFallback render also failed\n`)
         }
       }
@@ -1108,7 +1108,7 @@ Press '?', '/', or 'Esc' to close...`,
                 } else if (step.status === "in_progress") {
                   // Current running step - highlighted
                   const stepDuration = step.startedAt
-                    ? Math.floor((new Date().getTime() - new Date(step.startedAt).getTime()) / 1000)
+                    ? Math.floor((Date.now() - new Date(step.startedAt).getTime()) / 1000)
                     : 0
 
                   lines.push(
@@ -1136,7 +1136,7 @@ Press '?', '/', or 'Esc' to close...`,
             if (showAllSteps && job.steps && job.steps.length > 0) {
               // Show all completed steps with details when there's room
               job.steps.forEach((step, index) => {
-                const stepNumber = `${index + 1}/${job.steps!.length}`
+                const stepNumber = `${index + 1}/${job.steps?.length}`
                 const stepIcon =
                   step.conclusion === "success"
                     ? "✓"
@@ -1183,7 +1183,7 @@ Press '?', '/', or 'Esc' to close...`,
             if (job.steps && job.steps.length > 0) {
               lines.push(`    {gray-fg}Queued - ${job.steps.length} steps pending{/gray-fg}`)
               job.steps.forEach((step, index) => {
-                const stepNumber = `${index + 1}/${job.steps!.length}`
+                const stepNumber = `${index + 1}/${job.steps?.length}`
                 lines.push(`    {gray-fg}○ ${stepNumber} ${step.name}{/gray-fg}`)
               })
             } else {
@@ -1496,7 +1496,7 @@ Press '?', '/', or 'Esc' to close...`,
       if (!prsByRepo.has(key)) {
         prsByRepo.set(key, [])
       }
-      prsByRepo.get(key)!.push(pr)
+      prsByRepo.get(key)?.push(pr)
     }
 
     // Format each PR with status indicators

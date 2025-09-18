@@ -103,7 +103,7 @@ export class GitHubService {
 
       this.setCache(cacheKey, jobs)
       return jobs
-    } catch (error) {
+    } catch (_error) {
       // Silently fail for now, could log to file if needed
       return []
     }
@@ -118,7 +118,7 @@ export class GitHubService {
       )
 
       return stdout
-    } catch (error) {
+    } catch (_error) {
       // Silently fail for now, could log to file if needed
       return ""
     }

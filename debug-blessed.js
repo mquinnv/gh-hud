@@ -14,7 +14,7 @@ const screen = blessed.screen({
 
 console.log("Screen created, setting up...")
 
-const box = blessed.box({
+const _box = blessed.box({
   parent: screen,
   top: "center",
   left: "center",
