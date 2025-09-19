@@ -42,13 +42,13 @@ git clone https://github.com/mquinnv/gh-hud.git
 cd gh-hud
 
 # Install dependencies
-pnpm install
+bun install
 
 # Build the project
-pnpm build
+bun run build
 
 # Link globally (optional)
-pnpm link --global
+bun link
 ```
 
 ## Usage
@@ -181,16 +181,16 @@ Press `F9` to toggle the event log, and `F10` to cycle through log levels. The l
 
 ```bash
 # Run in development mode
-pnpm dev
+bun dev
 
 # Build the project
-pnpm build
+bun run build
 
 # Run linting
-pnpm lint
+bun run lint
 
 # Format code
-pnpm format
+bun run format
 ```
 
 ## Project Structure

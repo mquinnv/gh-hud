@@ -24,14 +24,14 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "build": "tsc",
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
-    "lint": "biome check --write .",
-    "format": "biome format --write .",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "gh-hud": "node dist/index.js",
-    "prepublishOnly": "pnpm run build && pnpm run lint"
+    "build": "bun run tsc",
+    "dev": "bun --watch src/index.ts",
+    "start": "bun dist/index.js",
+    "lint": "bun biome check --write .",
+    "format": "bun biome format --write .",
+    "test": "bun test",
+    "gh-hud": "bun dist/index.js",
+    "prepublishOnly": "bun run build && bun run lint"
   },
   "keywords": [
     "github",
@@ -43,12 +43,11 @@
   ],
   "author": "Michael Quinn",
   "license": "MIT",
-  "packageManager": "pnpm@10.12.4",
+  "packageManager": "bun@1.1.31",
   "devDependencies": {
     "@biomejs/biome": "^2.2.3",
     "@types/blessed": "^0.1.25",
     "@types/node": "^24.3.1",
-    "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   },
   "dependencies": {
