@@ -776,7 +776,7 @@ Press '?', '/', or 'Esc' to close...`,
       if (this.showPRs) {
         this.createOrUpdatePRHeader();
         if (this.pullRequests.length > 0) {
-          this.log(`Loaded ${this.pullRequests.length} open PRs`, "info");
+          this.log(`Loaded ${this.pullRequests.length} open PRs`, "debug");
         }
       }
 
