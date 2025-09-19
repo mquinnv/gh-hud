@@ -1339,7 +1339,7 @@ Press '?', '/', or 'Esc' to close...`,
     const refreshFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     const refreshIndicator = this.refreshAnimationTimer
       ? `{yellow-fg}${refreshFrames[this.refreshAnimationFrame % refreshFrames.length]}{/} `
-      : " "; // Space when not spinning to prevent text jumping
+      : "  "; // Two spaces when not spinning to prevent text jumping
 
     // Use last refresh time if available
     const updateTime = this.lastRefreshTime || new Date();
