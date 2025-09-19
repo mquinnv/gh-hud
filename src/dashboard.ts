@@ -1335,17 +1335,16 @@ Press '?', '/', or 'Esc' to close...`,
     ).length;
 
     // Animated refresh indicator - using braille spinner for smoothness
-    // Always reserve space for the spinner to prevent text jumping
     const refreshFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     const refreshIndicator = this.refreshAnimationTimer
-      ? `{yellow-fg}${refreshFrames[this.refreshAnimationFrame % refreshFrames.length]}{/}`
-      : " "; // Space when not spinning
+      ? `{yellow-fg}${refreshFrames[this.refreshAnimationFrame % refreshFrames.length]}{/} `
+      : "";
 
     // Use last refresh time if available
     const updateTime = this.lastRefreshTime || new Date();
 
-    // Line 1: Status counts and refresh indicator (spinner space is always reserved)
-    let line1 = `${refreshIndicator} Last Update: ${updateTime.toLocaleTimeString()} | `;
+    // Line 1: Status counts and refresh indicator
+    let line1 = `${refreshIndicator}Last Update: ${updateTime.toLocaleTimeString()} | `;
     line1 += `{yellow-fg}●{/} Running: ${runningCount} | `;
     line1 += `{gray-fg}○{/} Queued: ${queuedCount}`;
     if (completedCount > 0) {
@@ -1365,24 +1364,17 @@ Press '?', '/', or 'Esc' to close...`,
     ];
     const line2 = shortcuts.join(" | ");
 
-    // Only update if content actually changed (except for spinner)
-    const line1WithoutSpinner = line1.replace(/^.*?\} /, ""); // Remove spinner part
-    const lastLine1WithoutSpinner = this.lastStatusLine1.replace(/^.*?\} /, "");
+    // Only update if content changed or spinner is active
+    const contentChanged =
+      line1 !== this.lastStatusLine1 || line2 !== this.lastStatusLine2;
 
-    if (
-      line1WithoutSpinner !== lastLine1WithoutSpinner ||
-      line2 !== this.lastStatusLine2
-    ) {
+    if (contentChanged || this.refreshAnimationTimer) {
       this.statusBox.setContent(
         `{center}${line1}{/center}\n{center}{gray-fg}${line2}{/gray-fg}{/center}`,
       );
       this.lastStatusLine1 = line1;
       this.lastStatusLine2 = line2;
-    } else if (this.refreshAnimationTimer) {
-      // Just update the spinner portion without re-rendering everything
-      this.statusBox.setContent(
-        `{center}${line1}{/center}\n{center}{gray-fg}${line2}{/gray-fg}{/center}`,
-      );
+      this.screen.render();
     }
   }
 
@@ -1481,12 +1473,11 @@ Press '?', '/', or 'Esc' to close...`,
     // Update immediately to show spinner
     this.updateStatusBar();
 
-    // Start animation with moderate speed
+    // Start animation with moderate speed - not too fast to be jarring
     this.refreshAnimationTimer = setInterval(() => {
       this.refreshAnimationFrame++;
-      // Only update the spinner, not the whole status bar
       this.updateStatusBar();
-    }, 150); // 150ms for smooth but not excessive updates
+    }, 300); // 300ms for smooth, non-jarring animation
   }
 
   stopRefreshAnimation(): void {
