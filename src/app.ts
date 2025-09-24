@@ -110,6 +110,28 @@ export class App {
       }
     })
 
+    // Handle opening PR in browser
+    this.dashboard.onOpenPR(async (pr: PullRequest) => {
+      try {
+        const url = pr.url
+        const platform = process.platform
+
+        let command: string
+        if (platform === "darwin") {
+          command = `open "${url}"`
+        } else if (platform === "win32") {
+          command = `start "${url}"`
+        } else {
+          command = `xdg-open "${url}"`
+        }
+
+        await execAsync(command)
+        this.dashboard.log(`Opened PR #${pr.number}: ${pr.title}`, "info")
+      } catch (_error) {
+        // Silently fail
+      }
+    })
+
     // Handle dismissing completed workflows
     this.dashboard.onDismissWorkflow((workflow: WorkflowRun) => {
       this.dismissCompletedWorkflow(workflow.id)

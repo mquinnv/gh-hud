@@ -13,6 +13,8 @@ export class Dashboard {
   private dockerHeaderBox?: blessed.Widgets.BoxElement;
   private helpBox?: blessed.Widgets.BoxElement;
   private selectedIndex = 0;
+  private selectedPRIndex = 0;
+  private selectionMode: "workflows" | "prs" = "workflows"; // Track which area is selected
   private workflows: WorkflowRun[] = [];
   private pullRequests: PullRequest[] = [];
   private dockerServices: DockerServiceStatus[] = [];
@@ -269,29 +271,65 @@ export class Dashboard {
       this.screen.emit("manual-refresh");
     });
 
+    // Tab key to switch between PR area and workflows
+    this.screen.key(["tab"], () => {
+      this.queueKeyEvent(() => this.switchSelectionMode());
+    });
+
     // 2D Grid Navigation keys (vim-style)
     this.screen.key(["up", "k", "C-p"], () => {
-      this.queueKeyEvent(() => this.navigateGrid("up"));
+      this.queueKeyEvent(() => {
+        if (this.selectionMode === "workflows") {
+          this.navigateGrid("up");
+        } else if (this.selectionMode === "prs") {
+          this.navigatePRs("up");
+        }
+      });
     });
 
     this.screen.key(["down", "j", "C-n"], () => {
-      this.queueKeyEvent(() => this.navigateGrid("down"));
+      this.queueKeyEvent(() => {
+        if (this.selectionMode === "workflows") {
+          this.navigateGrid("down");
+        } else if (this.selectionMode === "prs") {
+          this.navigatePRs("down");
+        }
+      });
     });
 
     // Left/right navigation (vim-style)
     this.screen.key(["left", "h"], () => {
-      this.queueKeyEvent(() => this.navigateGrid("left"));
+      this.queueKeyEvent(() => {
+        if (this.selectionMode === "workflows") {
+          this.navigateGrid("left");
+        } else if (this.selectionMode === "prs") {
+          this.navigatePRs("left");
+        }
+      });
     });
 
     this.screen.key(["right", "l"], () => {
-      this.queueKeyEvent(() => this.navigateGrid("right"));
+      this.queueKeyEvent(() => {
+        if (this.selectionMode === "workflows") {
+          this.navigateGrid("right");
+        } else if (this.selectionMode === "prs") {
+          this.navigatePRs("right");
+        }
+      });
     });
 
-    // Open workflow in browser
+    // Open workflow or PR in browser
     this.screen.key(["enter"], () => {
-      const workflow = this.workflows[this.selectedIndex];
-      if (workflow) {
-        this.screen.emit("open-workflow", workflow);
+      if (this.selectionMode === "workflows") {
+        const workflow = this.workflows[this.selectedIndex];
+        if (workflow) {
+          this.screen.emit("open-workflow", workflow);
+        }
+      } else if (this.selectionMode === "prs" && this.showPRs) {
+        const pr = this.pullRequests[this.selectedPRIndex];
+        if (pr) {
+          this.screen.emit("open-pr", pr);
+        }
       }
     });
 
@@ -401,6 +439,71 @@ export class Dashboard {
     }
     const index = this.coordsToIndex(row, col);
     return index >= 0 && index < this.workflows.length;
+  }
+
+  // Switch between PR and workflow selection modes
+  private switchSelectionMode(): void {
+    if (!this.showPRs) return; // Can't switch if PRs aren't shown
+    
+    if (this.selectionMode === "workflows") {
+      if (this.pullRequests.length > 0) {
+        this.selectionMode = "prs";
+        this.log("Switched to PR selection mode (Tab to switch back)", "debug");
+        this.updatePRHighlight();
+        this.highlightSelected(); // Remove workflow highlight
+      }
+    } else {
+      this.selectionMode = "workflows";
+      this.log("Switched to workflow selection mode", "debug");
+      this.updatePRHighlight();
+      this.highlightSelected(); // Restore workflow highlight
+    }
+  }
+
+  // Navigate PRs
+  private navigatePRs(direction: "up" | "down" | "left" | "right"): void {
+    if (this.pullRequests.length === 0) return;
+    
+    const currentIndex = this.selectedPRIndex;
+    let newIndex = currentIndex;
+    
+    switch (direction) {
+      case "left":
+      case "up":
+        newIndex = currentIndex - 1;
+        if (newIndex < 0) {
+          newIndex = this.pullRequests.length - 1; // Wrap to end
+        }
+        break;
+      case "right":
+      case "down":
+        newIndex = currentIndex + 1;
+        if (newIndex >= this.pullRequests.length) {
+          newIndex = 0; // Wrap to beginning
+        }
+        break;
+    }
+    
+    if (newIndex !== currentIndex) {
+      this.selectedPRIndex = newIndex;
+      this.updatePRHighlight();
+    }
+  }
+
+  // Update PR header to show selection
+  private updatePRHighlight(): void {
+    if (!this.prHeaderBox) return;
+    
+    // Re-render PR content with selection highlight
+    const prContent = this.formatPRHeader(this.pullRequests);
+    this.prHeaderBox.setContent(prContent);
+    
+    // Update border color based on selection mode
+    if (this.prHeaderBox.style?.border) {
+      this.prHeaderBox.style.border.fg = this.selectionMode === "prs" ? "cyan" : "#666666";
+    }
+    
+    this.scheduleRender();
   }
 
   // Navigate the 2D grid spatially
@@ -525,8 +628,22 @@ export class Dashboard {
       this.selectedIndex = Math.max(0, maxIndex);
     }
 
-    // Skip if selection hasn't changed
-    if (this.selectedIndex === this.lastSelectedIndex) {
+    // Skip if selection hasn't changed and we're in workflow mode
+    if (this.selectedIndex === this.lastSelectedIndex && this.selectionMode === "workflows") {
+      return;
+    }
+
+    // Clear workflow selection if we're in PR mode
+    if (this.selectionMode === "prs") {
+      // Remove highlight from all workflow boxes
+      this.grid.forEach((box, index) => {
+        if (box?.style?.border) {
+          const workflow = this.workflows[index];
+          box.style.border.fg = workflow ? this.getBorderColor(workflow, false) : "#f0f0f0";
+        }
+      });
+      this.lastSelectedIndex = -1;
+      this.scheduleRender();
       return;
     }
 
@@ -604,11 +721,12 @@ export class Dashboard {
 {center}{bold}GitHub Workflow Monitor - Help{/bold}{/center}
 
 {bold}Navigation:{/bold}
-  ↑/k     - Move up in grid
-  ↓/j     - Move down in grid
-  ←/h     - Move left in grid
-  →/l     - Move right in grid
-  Enter   - Open workflow in browser
+  Tab     - Switch between PRs and workflows
+  ↑/k     - Move up in current area
+  ↓/j     - Move down in current area
+  ←/h     - Move left in current area
+  →/l     - Move right in current area
+  Enter   - Open selected item in browser
 
 {bold}Actions:{/bold}
   r       - Force refresh
@@ -618,7 +736,7 @@ export class Dashboard {
   q/Ctrl+C - Quit
 
 {bold}Options:{/bold}
-  --show-prs - Show open PRs in header bar
+  --show-prs - Show open PRs in header
   F9         - Toggle event log panel
   F10        - Cycle log level (info/debug/trace)
   a          - Toggle auto-show on startup
@@ -1421,6 +1539,10 @@ Press '?', '/', or 'Esc' to close...`,
     this.screen.on("dismiss-all-completed", callback);
   }
 
+  onOpenPR(callback: (pr: PullRequest) => void): void {
+    this.screen.on("open-pr", callback);
+  }
+
   showError(message: string): void {
     // Clear existing content
     this.grid.forEach((box) => {
@@ -1723,23 +1845,25 @@ Press '?', '/', or 'Esc' to close...`,
     }
 
     const lines: string[] = [];
-    lines.push("{bold}{yellow-fg}Open Pull Requests:{/yellow-fg}{/bold}");
-    lines.push("");
+    lines.push("{bold}{yellow-fg}Open Pull Requests:{/yellow-fg}{/bold}")
+    lines.push("")
 
     // Group PRs by repository
-    const prsByRepo = new Map<string, PullRequest[]>();
+    const prsByRepo = new Map<string, PullRequest[]>()
     for (const pr of prs) {
-      const key = `${pr.repository.owner}/${pr.repository.name}`;
+      const key = `${pr.repository.owner}/${pr.repository.name}`
       if (!prsByRepo.has(key)) {
-        prsByRepo.set(key, []);
+        prsByRepo.set(key, [])
       }
-      prsByRepo.get(key)?.push(pr);
+      prsByRepo.get(key)?.push(pr)
     }
 
     // Format each PR with status indicators
     const prLines: string[] = [];
+    let currentIndex = 0;
     for (const [repo, repoPrs] of prsByRepo) {
       for (const pr of repoPrs) {
+        const isSelected = this.selectionMode === "prs" && currentIndex === this.selectedPRIndex;
         let statusIcon = "";
         let statusColor = "white";
 
@@ -1784,9 +1908,16 @@ Press '?', '/', or 'Esc' to close...`,
         const draftIndicator =
           pr.draft || pr.isDraft ? "{gray-fg}[DRAFT]{/gray-fg} " : "";
 
-        // Format the PR line
-        const prLine = `{${statusColor}-fg}${statusIcon}{/} ${draftIndicator}{cyan-fg}#${pr.number}{/} ${pr.title.substring(0, 50)} {gray-fg}(${pr.headRefName}){/gray-fg}${reviewIcon}${conflictIcon} {gray-fg}[${repo}]{/gray-fg}`;
-        prLines.push(prLine);
+        // Format the PR line with selection highlight
+        let prLine = `{${statusColor}-fg}${statusIcon}{/} ${draftIndicator}{cyan-fg}#${pr.number}{/} ${pr.title.substring(0, 50)} {gray-fg}(${pr.headRefName}){/gray-fg}${reviewIcon}${conflictIcon} {gray-fg}[${repo}]{/gray-fg}`
+        
+        // Add selection highlight
+        if (isSelected) {
+          prLine = `{inverse}${prLine}{/inverse}`
+        }
+        
+        prLines.push(prLine)
+        currentIndex++
       }
     }
 
