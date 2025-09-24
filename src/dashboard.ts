@@ -1277,19 +1277,19 @@ Press '?', '/', or 'Esc' to close...`,
     } else {
       const branchName = workflow.headBranch;
       lines.push(
-        `{bold}${projectName} \ue725 ${branchName}{/bold}`,
+        ` {bold}${projectName} \ue725 ${branchName}{/bold}`,
       );
-      lines.push(`${workflow.workflowName || "CI"} Run #{yellow-fg}${workflow.runNumber}{/yellow-fg}`);
+      lines.push(` ${workflow.workflowName || "CI"} Run #{yellow-fg}${workflow.runNumber}{/yellow-fg}`);
     }
     lines.push("");
 
     // Event and commit info (removed duplicate branch line)
-    lines.push(`Triggered by: {magenta-fg}${workflow.event}{/magenta-fg}`);
+    lines.push(` Triggered by: {magenta-fg}${workflow.event}{/magenta-fg}`);
     if (workflow.headSha) {
-      lines.push(`Commit: {gray-fg}${workflow.headSha.substring(0, 7)}{/gray-fg}`);
+      lines.push(` Commit: {gray-fg}${workflow.headSha.substring(0, 7)}{/gray-fg}`);
     }
     // Show repository owner in smaller text if needed
-    lines.push(`Repo: {gray-fg}${workflow.repository.owner}/${workflow.repository.name}{/gray-fg}`);
+    lines.push(` Repo: {gray-fg}${workflow.repository.owner}/${workflow.repository.name}{/gray-fg}`);
     lines.push("");
 
     // Status with more detail
@@ -1299,18 +1299,18 @@ Press '?', '/', or 'Esc' to close...`,
       workflow.conclusion,
     );
     lines.push(
-      `Status: {${statusColor}-fg}${statusIcon} ${workflow.status.toUpperCase()}{/}`,
+      ` Status: {${statusColor}-fg}${statusIcon} ${workflow.status.toUpperCase()}{/}`,
     );
 
     if (workflow.conclusion) {
       lines.push(
-        `Result: {${statusColor}-fg}${workflow.conclusion.toUpperCase()}{/}`,
+        ` Result: {${statusColor}-fg}${workflow.conclusion.toUpperCase()}{/}`,
       );
     }
 
     // Show dismiss hint for completed workflows
     if (workflow.status === "completed") {
-      lines.push(`{gray-fg}Press 'd' to dismiss{/gray-fg}`);
+      lines.push(` {gray-fg}Press 'd' to dismiss{/gray-fg}`);
     }
 
     // Timing information
@@ -1320,7 +1320,7 @@ Press '?', '/', or 'Esc' to close...`,
       const duration = Math.floor((now.getTime() - startTime.getTime()) / 1000);
       const minutes = Math.floor(duration / 60);
       const seconds = duration % 60;
-      lines.push(`Running: {white-fg}${minutes}m ${seconds}s{/white-fg}`);
+      lines.push(` Running: {white-fg}${minutes}m ${seconds}s{/white-fg}`);
     }
 
     if (workflow.createdAt !== workflow.startedAt) {
@@ -1329,7 +1329,7 @@ Press '?', '/', or 'Esc' to close...`,
         new Date(workflow.createdAt).getTime();
       if (queueTime > 1000) {
         const queueSeconds = Math.floor(queueTime / 1000);
-        lines.push(`Queue time: {gray-fg}${queueSeconds}s{/gray-fg}`);
+        lines.push(` Queue time: {gray-fg}${queueSeconds}s{/gray-fg}`);
       }
     }
 
@@ -1337,7 +1337,7 @@ Press '?', '/', or 'Esc' to close...`,
 
     // Jobs with detailed step information
     if (jobs.length > 0) {
-      lines.push("{bold}Jobs & Steps:{/bold}");
+      lines.push(" {bold}Jobs & Steps:{/bold}");
       jobs.forEach((job) => {
         const jobIcon = this.getStatusIcon(job.status, job.conclusion);
         const jobColor = this.getStatusColor(job.status, job.conclusion);
@@ -1515,7 +1515,7 @@ Press '?', '/', or 'Esc' to close...`,
         lines.push("");
       });
     } else {
-      lines.push("{gray-fg}Loading job details...{/gray-fg}");
+      lines.push(" {gray-fg}Loading job details...{/gray-fg}");
     }
 
     return lines.join("\n");
