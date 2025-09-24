@@ -2,7 +2,7 @@ import { execa } from "execa"
 import type { PullRequest, Repository, WorkflowJob, WorkflowRun } from "./types.js"
 
 export class GitHubService {
-  private cache: Map<string, { data: any; timestamp: number }> = new Map()
+  private cache: Map<string, { data: unknown; timestamp: number }> = new Map()
   private cacheTimeout = 5000 // 5 seconds
 
   async listRepositories(org?: string): Promise<Repository[]> {
@@ -15,7 +15,7 @@ export class GitHubService {
       const { stdout } = await execa("gh", args, { timeout: 10000 })
       const repos = JSON.parse(stdout)
 
-      return repos.map((repo: any) => ({
+      return repos.map((repo: { owner: { login: string }; name: string }) => ({
         owner: repo.owner.login,
         name: repo.name,
         fullName: `${repo.owner.login}/${repo.name}`,
@@ -54,25 +54,44 @@ export class GitHubService {
       const runs = JSON.parse(stdout)
       const [owner, name] = repo.split("/")
 
-      const workflowRuns: WorkflowRun[] = runs.map((run: any) => ({
-        id: run.databaseId || run.id,
-        name: run.name || run.displayTitle,
-        headBranch: run.headBranch,
-        headSha: run.headSha,
-        runNumber: run.number,
-        event: run.event,
-        status: run.status,
-        conclusion: run.conclusion,
-        workflowId: run.workflowDatabaseId,
-        workflowName: run.workflowName,
-        url: run.url,
-        htmlUrl: run.url, // gh doesn't provide htmlUrl, use url
-        createdAt: run.createdAt,
-        updatedAt: run.updatedAt,
-        startedAt: run.startedAt,
-        repository: { owner, name },
-        headCommit: undefined, // gh run list doesn't provide commit info
-      }))
+      const workflowRuns: WorkflowRun[] = runs.map(
+        (run: {
+          databaseId?: number
+          id?: number
+          name?: string
+          displayTitle?: string
+          headBranch: string
+          headSha: string
+          number: number
+          event: string
+          status: string
+          conclusion: string
+          workflowDatabaseId: number
+          workflowName: string
+          url: string
+          createdAt: string
+          updatedAt: string
+          startedAt: string
+        }) => ({
+          id: run.databaseId || run.id,
+          name: run.name || run.displayTitle,
+          headBranch: run.headBranch,
+          headSha: run.headSha,
+          runNumber: run.number,
+          event: run.event,
+          status: run.status,
+          conclusion: run.conclusion,
+          workflowId: run.workflowDatabaseId,
+          workflowName: run.workflowName,
+          url: run.url,
+          htmlUrl: run.url, // gh doesn't provide htmlUrl, use url
+          createdAt: run.createdAt,
+          updatedAt: run.updatedAt,
+          startedAt: run.startedAt,
+          repository: { owner, name },
+          headCommit: undefined, // gh run list doesn't provide commit info
+        }),
+      )
 
       this.setCache(cacheKey, workflowRuns)
       return workflowRuns
@@ -150,7 +169,7 @@ export class GitHubService {
     return cached.data as T
   }
 
-  private setCache(key: string, data: any): void {
+  private setCache(key: string, data: unknown): void {
     this.cache.set(key, {
       data,
       timestamp: Date.now(),
@@ -187,26 +206,45 @@ export class GitHubService {
       const prs = JSON.parse(stdout)
       const [owner, name] = repo.split("/")
 
-      const pullRequests: PullRequest[] = prs.map((pr: any) => ({
-        id: pr.id,
-        number: pr.number,
-        title: pr.title,
-        state: pr.state?.toLowerCase() || "open",
-        draft: pr.isDraft || false,
-        user: {
-          login: pr.author?.login || "unknown",
-        },
-        headRefName: pr.headRefName,
-        baseRefName: pr.baseRefName,
-        url: pr.url,
-        createdAt: pr.createdAt,
-        updatedAt: pr.updatedAt,
-        repository: { owner, name },
-        statusCheckRollup: pr.statusCheckRollup ? { state: pr.statusCheckRollup.state } : undefined,
-        reviewDecision: pr.reviewDecision,
-        mergeable: pr.mergeable,
-        isDraft: pr.isDraft,
-      }))
+      const pullRequests: PullRequest[] = prs.map(
+        (pr: {
+          id: string
+          number: number
+          title: string
+          state?: string
+          isDraft?: boolean
+          headRefName: string
+          baseRefName: string
+          url: string
+          createdAt: string
+          updatedAt: string
+          author?: { login: string }
+          statusCheckRollup?: { state: string }
+          reviewDecision?: string
+          mergeable?: string
+        }) => ({
+          id: pr.id,
+          number: pr.number,
+          title: pr.title,
+          state: pr.state?.toLowerCase() || "open",
+          draft: pr.isDraft || false,
+          user: {
+            login: pr.author?.login || "unknown",
+          },
+          headRefName: pr.headRefName,
+          baseRefName: pr.baseRefName,
+          url: pr.url,
+          createdAt: pr.createdAt,
+          updatedAt: pr.updatedAt,
+          repository: { owner, name },
+          statusCheckRollup: pr.statusCheckRollup
+            ? { state: pr.statusCheckRollup.state }
+            : undefined,
+          reviewDecision: pr.reviewDecision,
+          mergeable: pr.mergeable,
+          isDraft: pr.isDraft,
+        }),
+      )
 
       this.setCache(cacheKey, pullRequests)
       return pullRequests

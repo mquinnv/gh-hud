@@ -23,6 +23,7 @@ program
   .option("-i, --interval <seconds>", "Refresh interval in seconds", "5")
   .option("-s, --status <statuses...>", "Filter by status (queued, in_progress, completed)")
   .option("-p, --show-prs", "Show open pull requests in header")
+  .option("-d, --show-docker", "Show Docker Compose service status in header")
   .action(async (options) => {
     const app = new App()
 
@@ -33,6 +34,7 @@ program
         organizations: options.org,
         interval: parseInt(options.interval, 10),
         showPRs: options.showPrs,
+        showDocker: options.showDocker,
       })
     } catch (error) {
       // Write to stderr in a way that won't interfere with the UI
@@ -66,6 +68,7 @@ program
   .option("-i, --interval <seconds>", "Refresh interval in seconds", "5")
   .option("-s, --status <statuses...>", "Filter by status (queued, in_progress, completed)")
   .option("-p, --show-prs", "Show open pull requests in header")
+  .option("-d, --show-docker", "Show Docker Compose service status in header")
   .action(async (options) => {
     const app = new App()
 
@@ -76,6 +79,7 @@ program
         organizations: options.org,
         interval: parseInt(options.interval, 10),
         showPRs: options.showPrs,
+        showDocker: options.showDocker,
       })
     } catch (error) {
       // Write to stderr in a way that won't interfere with the UI

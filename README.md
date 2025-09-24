@@ -19,12 +19,14 @@ A terminal-based dashboard for monitoring GitHub Actions workflows across multip
 - 💾 **Persistent Settings**: Remembers your preferences between sessions
 - 📊 **Enhanced Status Bar**: Two-line status display with keyboard shortcuts reference
 - 🔔 **Pull Request Monitoring**: Optional display of open pull requests (--show-prs flag)
+- 🐳 **Docker Compose Monitoring**: Optional display of Docker service status (--show-docker flag)
 
 ## Prerequisites
 
 - Node.js 18+ 
 - `gh` CLI tool installed and authenticated
 - GitHub access to repositories you want to monitor
+- Docker (optional, required only for Docker service monitoring)
 
 ## Installation
 
@@ -97,6 +99,20 @@ gh-hud --config ~/.gh-hud.json
 gh-hud --show-prs  # Display open PRs in header
 ```
 
+### Show Docker Services
+
+```bash
+gh-hud --show-docker  # Display Docker Compose service status
+gh-hud -d             # Short form
+```
+
+### Combined Features
+
+```bash
+gh-hud --show-prs --show-docker  # Show both PRs and Docker services
+gh-hud -p -d                     # Short form
+```
+
 ## Configuration
 
 Create a `.gh-hud.json` file in your home directory or project root:
@@ -160,12 +176,22 @@ Create a `.gh-hud.json` file in your home directory or project root:
 
 ## Status Indicators
 
+### Workflow Status
 - 🟡 **Yellow (●)**: Workflow is running
 - 🟢 **Green (✓)**: Workflow completed successfully
 - 🔴 **Red (✗)**: Workflow failed
 - ⚪ **Gray (○)**: Workflow is queued
 - ⚪ **Gray (⊘)**: Workflow was cancelled
 - ⚪ **Gray (⊜)**: Workflow was skipped
+
+### Docker Service Status
+- 🟢 **Green (✓)**: Service is running and healthy
+- 🟢 **Green (●)**: Service is running (no health check)
+- 🟡 **Yellow (●)**: Service health is starting
+- 🔴 **Red (✗)**: Service is unhealthy
+- 🟡 **Yellow (↻)**: Service is restarting
+- 🟡 **Yellow (⏸)**: Service is paused
+- ⚪ **Gray (○)**: Service is stopped/exited
 
 ## Event Log
 
@@ -176,6 +202,18 @@ The built-in event log helps you track what's happening in your repositories:
 - **TRACE Level**: Shows all messages including detailed state updates
 
 Press `F9` to toggle the event log, and `F10` to cycle through log levels. The log automatically filters messages based on your selected level. Your preferences (height, auto-show, log level) are saved between sessions.
+
+## Docker Monitoring
+
+The Docker monitoring feature shows the status of services defined in `docker-compose.yml` files in your monitored repositories. It automatically:
+
+- Detects docker-compose files in repository roots
+- Shows service health status if health checks are configured
+- Displays exposed ports for each service
+- Groups services by repository
+- Updates status in real-time with the same refresh interval as workflows
+
+**Note**: Docker must be installed and running on your system for this feature to work. The tool will gracefully handle cases where Docker is not available.
 
 ## Development
 

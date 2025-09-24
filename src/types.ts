@@ -106,6 +106,27 @@ export interface DashboardState {
   workflows: Map<string, WorkflowRun>
   jobs: Map<string, WorkflowJob[]>
   pullRequests?: PullRequest[]
+  dockerServices?: DockerServiceStatus[]
   lastUpdate: Date
   error?: string
+}
+
+export interface DockerService {
+  name: string
+  containerName: string
+  state: "running" | "exited" | "paused" | "restarting" | "dead" | "removing" | "created"
+  status: string // e.g., "Up 2 hours", "Exited (0) 5 minutes ago"
+  health?: "healthy" | "unhealthy" | "starting" | "none"
+  ports?: string[]
+}
+
+export interface DockerServiceStatus {
+  repository: string // e.g., "owner/repo"
+  composeFile: string // path to docker-compose file
+  services: DockerService[]
+  error?: string
+}
+
+export interface DockerComposeConfig {
+  services: Record<string, unknown>
 }

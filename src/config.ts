@@ -3,7 +3,8 @@ import { readFile } from "fs/promises"
 import { homedir } from "os"
 import { join } from "path"
 import type { Dashboard } from "./dashboard.js"
-import type { Config } from "./types.js"
+import type { GitHubService } from "./github.js"
+import type { Config, Repository } from "./types.js"
 
 const DEFAULT_CONFIG: Config = {
   repositories: [],
@@ -96,7 +97,10 @@ export class ConfigManager {
   }
 
   // Build final list of repositories from config and orgs
-  async buildRepositoryList(githubService: any, dashboard?: Dashboard): Promise<string[]> {
+  async buildRepositoryList(
+    githubService: GitHubService,
+    dashboard?: Dashboard,
+  ): Promise<string[]> {
     const repos = new Set<string>()
 
     // Add explicitly configured repositories
@@ -110,7 +114,7 @@ export class ConfigManager {
         if (dashboard) dashboard.log(`Fetching repositories for org: ${org}`, "debug")
         const orgRepos = await Promise.race([
           githubService.listRepositories(org),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 15000)),
+          new Promise<Repository[]>((_, reject) => setTimeout(() => reject(new Error("Timeout")), 15000)),
         ])
         for (const repo of orgRepos) {
           repos.add(repo.fullName)

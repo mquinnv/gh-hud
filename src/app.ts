@@ -2,13 +2,15 @@ import { exec } from "child_process"
 import { promisify } from "util"
 import { ConfigManager } from "./config.js"
 import { Dashboard } from "./dashboard.js"
+import { DockerServiceManager } from "./docker-utils.js"
 import { GitHubService } from "./github.js"
-import type { PullRequest, WorkflowJob, WorkflowRun } from "./types.js"
+import type { DockerServiceStatus, PullRequest, WorkflowJob, WorkflowRun } from "./types.js"
 
 const execAsync = promisify(exec)
 
 export class App {
   private githubService: GitHubService
+  private dockerService: DockerServiceManager
   private configManager: ConfigManager
   private dashboard: Dashboard
   private refreshInterval?: NodeJS.Timeout
@@ -19,9 +21,12 @@ export class App {
   private completedWorkflows: Map<number, WorkflowRun> = new Map() // Keep completed workflows until dismissed
   private showPRs = false
   private pullRequests: PullRequest[] = []
+  private showDocker = false
+  private dockerServices: DockerServiceStatus[] = []
 
   constructor() {
     this.githubService = new GitHubService()
+    this.dockerService = new DockerServiceManager()
     this.configManager = new ConfigManager()
     this.dashboard = new Dashboard()
   }
@@ -32,6 +37,7 @@ export class App {
     organizations?: string[]
     interval?: number
     showPRs?: boolean
+    showDocker?: boolean
   }): Promise<void> {
     // Load configuration
     await this.configManager.loadConfig(args.config)
@@ -47,8 +53,9 @@ export class App {
       this.configManager.updateFromArgs({ refreshInterval: args.interval * 1000 })
     }
 
-    // Store the showPRs flag
+    // Store the showPRs and showDocker flags
     this.showPRs = args.showPRs || false
+    this.showDocker = args.showDocker || false
 
     // Build repository list
     this.repositories = await this.configManager.buildRepositoryList(
@@ -133,6 +140,12 @@ export class App {
         this.pullRequests = await this.githubService.getAllPullRequests(this.repositories)
       }
 
+      // Fetch Docker services if requested
+      if (this.showDocker) {
+        this.dockerServices = await this.dockerService.getAllDockerStatus(this.repositories)
+        this.dashboard.log(`Found ${this.dockerServices.length} docker-compose configurations`, "debug")
+      }
+
       // Update watched and completed trackers
       for (const run of allRuns) {
         if (run.status !== "completed") {
@@ -167,7 +180,7 @@ export class App {
       })
 
       // Update dashboard
-      this.dashboard.updateWorkflows(workflows, this.jobs, this.pullRequests)
+      this.dashboard.updateWorkflows(workflows, this.jobs, this.pullRequests, this.dockerServices)
     } catch (error) {
       // Show error in dashboard
       this.dashboard.log(`Error refreshing: ${error}`, "error")
@@ -221,7 +234,7 @@ export class App {
     })
 
     // Update dashboard with filtered workflows immediately
-    this.dashboard.updateWorkflows(filteredWorkflows, this.jobs, this.pullRequests)
+    this.dashboard.updateWorkflows(filteredWorkflows, this.jobs, this.pullRequests, this.dockerServices)
   }
 
   stop(): void {
