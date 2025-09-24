@@ -1621,115 +1621,100 @@ Press '?', '/', or 'Esc' to close...`,
 
   private formatDockerHeader(dockerStatuses: DockerServiceStatus[]): string {
     if (dockerStatuses.length === 0) {
-      return "{center}{gray-fg}No Docker services found{/gray-fg}{/center}";
+      return "{center}{gray-fg}No Docker services found{/gray-fg}{/center}"
     }
 
-    const lines: string[] = [];
-    lines.push("{bold}{cyan-fg}Docker Services:{/cyan-fg}{/bold}");
-    lines.push("");
-
-    // Collect all services across all compose files
-    const serviceLines: string[] = [];
+    const lines: string[] = []
+    
+    // Collect all services with simplified format
+    const services: Array<{name: string, icon: string, color: string, repo: string}> = []
     let hasErrors = false;
 
     for (const status of dockerStatuses) {
       if (status.error) {
         hasErrors = true;
         if (status.error.includes("not installed")) {
-          serviceLines.push("{red-fg}⚠ Docker is not installed or not available{/red-fg}");
-          break; // Don't show other errors if Docker isn't available
+          lines.push("{center}{red-fg}⚠ Docker is not installed or not available{/red-fg}{/center}")
+          return lines.join("\n")
         }
-        serviceLines.push(`{red-fg}⚠ ${status.repository}: ${status.error}{/red-fg}`);
         continue;
       }
 
       if (status.services.length === 0) {
-        continue; // Skip empty service lists
+        continue;
       }
 
-      // Group services by repository
       const repoName = status.repository.split("/")[1] || status.repository;
       
       for (const service of status.services) {
-        let statusIcon = "";
-        let statusColor = "white";
+        let icon = ""
+        let color = "white"
 
-        // Determine icon and color based on state and health
+        // Simplified icon logic - focus on health for running services
         if (service.state === "running") {
           if (service.health === "healthy") {
-            statusIcon = "✓";
-            statusColor = "green";
+            icon = "✓"
+            color = "green"
           } else if (service.health === "unhealthy") {
-            statusIcon = "✗";
-            statusColor = "red";
+            icon = "✗"
+            color = "red"
           } else if (service.health === "starting") {
-            statusIcon = "●";
-            statusColor = "yellow";
+            icon = "◐"
+            color = "yellow"
           } else {
-            statusIcon = "●";
-            statusColor = "green";
+            icon = "●"
+            color = "green"
           }
         } else if (service.state === "exited") {
-          statusIcon = "○";
-          statusColor = "gray";
+          icon = "○"
+          color = "gray"
         } else if (service.state === "restarting") {
-          statusIcon = "↻";
-          statusColor = "yellow";
+          icon = "↻"
+          color = "yellow"
         } else if (service.state === "paused") {
-          statusIcon = "⏸";
-          statusColor = "yellow";
+          icon = "⏸"
+          color = "yellow"
         } else {
-          statusIcon = "?";
-          statusColor = "gray";
+          icon = "?"
+          color = "gray"
         }
 
-        // Format service line
-        const healthIndicator = service.health && service.health !== "none" 
-          ? ` {gray-fg}[${service.health}]{/gray-fg}` 
-          : "";
-        
-        const portsInfo = service.ports && service.ports.length > 0 
-          ? ` {gray-fg}(${service.ports.join(", ")}){/gray-fg}` 
-          : "";
-
-        const serviceLine = `{${statusColor}-fg}${statusIcon}{/} ${service.name}${healthIndicator} {gray-fg}${service.status}{/gray-fg}${portsInfo} {gray-fg}[${repoName}]{/gray-fg}`;
-        serviceLines.push(serviceLine);
+        services.push({name: service.name, icon, color, repo: repoName})
       }
     }
 
-    // If no services but no errors, show message
-    if (serviceLines.length === 0 && !hasErrors) {
-      serviceLines.push("{gray-fg}No running Docker services{/gray-fg}");
+    if (services.length === 0 && !hasErrors) {
+      return "{center}{gray-fg}No Docker services running{/gray-fg}{/center}"
     }
 
-    // Show services in columns if there's enough space
-    const screenWidth = this.screen.width as number;
-    if (screenWidth > 160 && serviceLines.length >= 2) {
-      // Two column layout
-      const half = Math.ceil(serviceLines.length / 2);
-      const leftColumn = serviceLines.slice(0, half);
-      const rightColumn = serviceLines.slice(half);
-
-      for (
-        let i = 0;
-        i < Math.max(leftColumn.length, rightColumn.length);
-        i++
-      ) {
-        const left = leftColumn[i] || "";
-        const right = rightColumn[i] || "";
-        lines.push(`  ${left.padEnd(Math.min(80, screenWidth / 2))} ${right}`);
+    // Group by repo for better organization
+    const servicesByRepo = new Map<string, typeof services>()
+    for (const service of services) {
+      if (!servicesByRepo.has(service.repo)) {
+        servicesByRepo.set(service.repo, [])
       }
-    } else {
-      // Single column layout - show max 3 services to save space
-      for (const serviceLine of serviceLines.slice(0, 3)) {
-        lines.push(`  ${serviceLine}`);
-      }
-      if (serviceLines.length > 3) {
-        lines.push(`  {gray-fg}... and ${serviceLines.length - 3} more services{/gray-fg}`);
-      }
+      servicesByRepo.get(service.repo)?.push(service)
     }
 
-    return lines.slice(0, 4).join("\n"); // Limit to 4 lines to fit in 5-height box with border
+    // Format as compact inline list per repo
+    lines.push("{bold}{cyan-fg}Docker:{/cyan-fg}{/bold}")
+    
+    for (const [repo, repoServices] of servicesByRepo) {
+      const serviceItems = repoServices.map(s => 
+        `{${s.color}-fg}${s.icon}{/} ${s.name}`
+      ).join("  ") // Two spaces between services
+      
+      lines.push(`  {gray-fg}[${repo}]{/gray-fg} ${serviceItems}`)
+    }
+
+    // If we have too many lines, truncate and show count
+    const maxLines = 3
+    if (lines.length > maxLines + 1) {
+      const totalServices = services.length
+      lines.splice(maxLines, lines.length, `  {gray-fg}... ${totalServices} services total{/gray-fg}`)
+    }
+
+    return lines.slice(0, 4).join("\n"); // Limit to 4 lines to fit in 5-height box
   }
 
   private formatPRHeader(prs: PullRequest[]): string {
