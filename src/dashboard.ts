@@ -2061,7 +2061,7 @@ Press '?', '/', or 'Esc' to close...`,
         return serviceText;
       }).join("  "); // Two spaces between services
       
-      lines.push(` {gray-fg}[${project}]{/gray-fg} ${serviceItems}`); // 1-space margin
+      lines.push(` {bold}${project}{/bold} ${serviceItems}`); // Bold project name, no brackets
       serviceIndex += repoServices.length;
     }
 
@@ -2143,16 +2143,16 @@ Press '?', '/', or 'Esc' to close...`,
           conflictIndicator = " {red-fg}⚠{/red-fg}"  // Warning triangle for conflicts
         }
 
-        // Format: PR# [project] source -> target icon [conflict]
+        // Format: project PR# source -> target icon [conflict]
         // Use working directory name if we have a mapping, otherwise use repo name
         const projectName = repoToWorkingDir[repo] || repo.split("/")[1] || repo;
-        const prText = `{cyan-fg}PR #${pr.number}{/} {gray-fg}[${projectName}]{/gray-fg} ${pr.headRefName} → ${pr.baseRefName} {${statusColor}-fg}${statusIcon}{/}${conflictIndicator}`
+        const prText = `{bold}${projectName}{/bold} {cyan-fg}PR #${pr.number}{/} ${pr.headRefName} → ${pr.baseRefName} {${statusColor}-fg}${statusIcon}{/}${conflictIndicator}`
         
         // Format the PR line
         let prLine: string
         if (isSelected && this.selectionMode === "prs") {
           // For selected PR, create plain text and apply inverse to entire padded line
-          const plainText = `PR #${pr.number} [${projectName}] ${pr.headRefName} → ${pr.baseRefName} ${statusIcon}${pr.mergeable === "CONFLICTING" ? " ⚠" : ""}`
+          const plainText = `${projectName} PR #${pr.number} ${pr.headRefName} → ${pr.baseRefName} ${statusIcon}${pr.mergeable === "CONFLICTING" ? " ⚠" : ""}`
           // Pad the text to a reasonable width before applying inverse
           const paddedText = plainText.padEnd(Math.min(80, (this.screen.width as number) - 4))
           prLine = `{inverse}${paddedText}{/inverse}`
