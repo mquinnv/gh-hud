@@ -1899,9 +1899,9 @@ Press '?', '/', or 'Esc' to close...`,
           statusColor = "gray"
         }
 
-        // Format as branch flow: source -> target
+        // Format as branch flow: PR# icon source -> target
         const repoName = repo.split("/")[1] || repo;
-        let prLine = `{${statusColor}-fg}${statusIcon}{/} ${pr.headRefName} → ${pr.baseRefName} {gray-fg}#${pr.number}{/} {gray-fg}[${repoName}]{/gray-fg}`
+        let prLine = `{cyan-fg}#${pr.number}{/} {${statusColor}-fg}${statusIcon}{/} ${pr.headRefName} → ${pr.baseRefName} {gray-fg}[${repoName}]{/gray-fg}`
         
         // Add selection highlight
         if (isSelected) {
