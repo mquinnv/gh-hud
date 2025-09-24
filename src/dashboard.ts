@@ -383,8 +383,89 @@ export class Dashboard {
       } else if (this.selectionMode === "docker" && this.showDocker) {
         const dockerService = this.flatDockerServices[this.selectedDockerIndex];
         if (dockerService) {
-          this.screen.emit("restart-docker", dockerService);
+          this.screen.emit("docker-action", "restart", dockerService);
         }
+      }
+    });
+
+    // Docker-specific keybindings
+    this.screen.key(["s"], () => {
+      if (this.selectionMode === "docker" && this.showDocker) {
+        const dockerService = this.flatDockerServices[this.selectedDockerIndex];
+        if (dockerService) {
+          // Smart toggle: stop if running, start if stopped
+          const action = dockerService.service.state === "running" ? "stop" : "start";
+          this.screen.emit("docker-action", action, dockerService);
+        }
+      }
+    });
+
+    this.screen.key(["l"], () => {
+      if (this.selectionMode === "docker" && this.showDocker) {
+        const dockerService = this.flatDockerServices[this.selectedDockerIndex];
+        if (dockerService) {
+          this.screen.emit("docker-action", "logs", dockerService);
+        }
+      } else if (this.selectionMode === "workflows") {
+        const workflow = this.workflows[this.selectedIndex];
+        if (workflow) {
+          this.screen.emit("workflow-logs", workflow);
+        }
+      }
+    });
+
+    this.screen.key(["u"], () => {
+      if (this.selectionMode === "docker" && this.showDocker) {
+        const dockerService = this.flatDockerServices[this.selectedDockerIndex];
+        if (dockerService) {
+          this.screen.emit("docker-action", "recreate", dockerService);
+        }
+      }
+    });
+
+    this.screen.key(["x"], () => {
+      if (this.selectionMode === "docker" && this.showDocker) {
+        const dockerService = this.flatDockerServices[this.selectedDockerIndex];
+        if (dockerService) {
+          this.screen.emit("docker-action", "shell", dockerService);
+        }
+      }
+    });
+
+    // PR-specific keybindings
+    this.screen.key(["m"], () => {
+      if (this.selectionMode === "prs" && this.showPRs) {
+        const pr = this.pullRequests[this.selectedPRIndex];
+        if (pr && pr.mergeable === "MERGEABLE") {
+          this.showMergeMenu(pr);
+        }
+      }
+    });
+
+    this.screen.key(["c"], () => {
+      if (this.selectionMode === "prs" && this.showPRs) {
+        const pr = this.pullRequests[this.selectedPRIndex];
+        if (pr) {
+          this.screen.emit("pr-checkout", pr);
+        }
+      }
+    });
+
+    this.screen.key(["r"], () => {
+      if (this.selectionMode === "prs" && this.showPRs) {
+        const pr = this.pullRequests[this.selectedPRIndex];
+        if (pr) {
+          const action = pr.isDraft ? "ready" : "draft";
+          this.screen.emit("pr-action", action, pr);
+        }
+      } else if (this.selectionMode === "workflows") {
+        const workflow = this.workflows[this.selectedIndex];
+        if (workflow && workflow.status === "completed") {
+          this.screen.emit("workflow-rerun", workflow);
+        }
+      } else {
+        // Regular refresh for other modes
+        this.screen.emit("manual-refresh");
       }
     });
 
@@ -986,6 +1067,73 @@ Press '?', '/', or 'Esc' to close...`,
     if (this.confirmBox) {
       this.confirmBox.destroy();
       this.confirmBox = undefined;
+    }
+    this.scheduleRender();
+  }
+
+  private mergeMenuBox?: blessed.Widgets.BoxElement;
+
+  private showMergeMenu(pr: PullRequest): void {
+    // Create merge menu dialog
+    if (this.mergeMenuBox) {
+      this.mergeMenuBox.destroy();
+    }
+
+    const projectName = `${pr.repository.owner}/${pr.repository.name}`;
+    
+    this.mergeMenuBox = blessed.box({
+      parent: this.screen,
+      top: "center",
+      left: "center",
+      width: 50,
+      height: 12,
+      content: `{center}{bold}{green-fg}Merge PR #${pr.number}{/green-fg}{/bold}{/center}\n\n{center}${pr.title}{/center}\n{center}${projectName}{/center}\n\n m: Merge commit\n s: Squash and merge\n r: Rebase and merge\n\n{center}{bold}ESC to cancel{/bold}{/center}`,
+      tags: true,
+      border: {
+        type: "line",
+      },
+      style: {
+        fg: "white",
+        border: {
+          fg: "green",
+        },
+      },
+      keys: true,
+    });
+
+    this.modalOpen = true;
+    this.mergeMenuBox.show();
+    this.mergeMenuBox.setFront();
+    this.mergeMenuBox.focus();
+
+    // Handle merge options
+    const mergeHandler = (_ch: any, key: any) => {
+      if (key) {
+        if (key.name === "m") {
+          this.hideMergeMenu();
+          this.screen.emit("pr-merge", pr, "merge");
+        } else if (key.name === "s") {
+          this.hideMergeMenu();
+          this.screen.emit("pr-merge", pr, "squash");
+        } else if (key.name === "r") {
+          this.hideMergeMenu();
+          this.screen.emit("pr-merge", pr, "rebase");
+        } else if (key.name === "escape") {
+          this.hideMergeMenu();
+        }
+      }
+    };
+
+    this.mergeMenuBox.once("keypress", mergeHandler);
+    
+    this.screen.render();
+  }
+
+  private hideMergeMenu(): void {
+    this.modalOpen = false;
+    if (this.mergeMenuBox) {
+      this.mergeMenuBox.destroy();
+      this.mergeMenuBox = undefined;
     }
     this.scheduleRender();
   }
@@ -1687,16 +1835,8 @@ Press '?', '/', or 'Esc' to close...`,
     }
     line1 += ` | Total: ${this.workflows.length}`;
 
-    // Line 2: Keyboard shortcuts - more compact without obvious labels
-    const shortcuts = [
-      "?",
-      "q",
-      "↑↓←→",
-      "Enter: open",
-      "d/D: dismiss",
-      "k: kill",
-      "F9: log",
-    ];
+    // Line 2: Context-aware keyboard shortcuts
+    const shortcuts = this.getContextualShortcuts();
     const line2 = shortcuts.join(" | ");
 
     // Only update if content changed or spinner is active
@@ -1739,6 +1879,92 @@ Press '?', '/', or 'Esc' to close...`,
 
   onRestartDocker(callback: (service: {service: {name: string, state: string, health?: string}, repo: string}) => void): void {
     this.screen.on("restart-docker", callback);
+  }
+
+  onDockerAction(callback: (action: string, service: {service: {name: string, state: string, health?: string}, repo: string}) => void): void {
+    (this.screen as any).on("docker-action", callback);
+  }
+
+  onPRMerge(callback: (pr: PullRequest, method: string) => void): void {
+    (this.screen as any).on("pr-merge", callback);
+  }
+
+  onPRCheckout(callback: (pr: PullRequest) => void): void {
+    (this.screen as any).on("pr-checkout", callback);
+  }
+
+  onPRAction(callback: (action: string, pr: PullRequest) => void): void {
+    (this.screen as any).on("pr-action", callback);
+  }
+
+  onWorkflowRerun(callback: (workflow: WorkflowRun) => void): void {
+    (this.screen as any).on("workflow-rerun", callback);
+  }
+
+  onWorkflowLogs(callback: (workflow: WorkflowRun) => void): void {
+    (this.screen as any).on("workflow-logs", callback);
+  }
+
+  // Get contextual shortcuts based on current selection
+  private getContextualShortcuts(): string[] {
+    const baseShortcuts = ["?", "q", "↑↓←→"];
+    
+    switch(this.selectionMode) {
+      case "docker": {
+        const service = this.flatDockerServices[this.selectedDockerIndex];
+        if (!service) return baseShortcuts;
+        
+        const shortcuts = [...baseShortcuts, "Enter: restart"];
+        
+        // Smart start/stop based on state
+        if (service.service.state === "running") {
+          shortcuts.push("s: stop");
+        } else {
+          shortcuts.push("s: start");
+        }
+        
+        shortcuts.push("l: logs", "u: recreate", "x: shell");
+        return shortcuts;
+      }
+      
+      case "prs": {
+        const pr = this.pullRequests[this.selectedPRIndex];
+        if (!pr) return baseShortcuts;
+        
+        const shortcuts = [...baseShortcuts, "Enter: open"];
+        
+        // Check if PR can be merged
+        if (pr.mergeable === "MERGEABLE") {
+          shortcuts.push("m: merge");
+        }
+        
+        if (pr.isDraft) {
+          shortcuts.push("r: ready");
+        } else {
+          shortcuts.push("r: to draft");
+        }
+        
+        shortcuts.push("c: checkout", "d: diff");
+        return shortcuts;
+      }
+      
+      case "workflows":
+      default: {
+        const workflow = this.workflows[this.selectedIndex];
+        if (!workflow) return baseShortcuts;
+        
+        const shortcuts = [...baseShortcuts, "Enter: open"];
+        
+        if (workflow.status === "in_progress" || workflow.status === "queued") {
+          shortcuts.push("k: cancel");
+        } else if (workflow.status === "completed") {
+          shortcuts.push("r: re-run", "d: dismiss");
+        }
+        
+        shortcuts.push("l: logs");
+        return shortcuts;
+      }
+    }
   }
 
   showError(message: string): void {

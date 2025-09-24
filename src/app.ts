@@ -160,12 +160,11 @@ export class App {
       }
     })
 
-    // Handle restarting Docker service
-    this.dashboard.onRestartDocker(async (dockerService: any) => {
+    // Handle Docker service actions
+    this.dashboard.onDockerAction(async (action: string, dockerService: any) => {
       try {
         const serviceName = dockerService.service.name
         const repo = dockerService.repo
-        this.dashboard.log(`Restarting Docker service ${serviceName} in ${repo}...`, "info")
         
         // Find the repository path
         const repository = this.repositories.find(r => r.includes(repo))
@@ -174,16 +173,51 @@ export class App {
           return
         }
         
-        // Execute docker compose restart command
         const repoPath = repository.startsWith("/") ? repository : process.cwd()
-        const command = `cd ${repoPath} && docker compose restart ${serviceName}`
-        await execAsync(command)
+        let command = ""
         
-        this.dashboard.log(`Successfully restarted ${serviceName}`, "info")
+        switch(action) {
+          case "start":
+            this.dashboard.log(`Starting Docker service ${serviceName} in ${repo}...`, "info")
+            command = `cd ${repoPath} && docker compose start ${serviceName}`
+            break;
+          case "stop":
+            this.dashboard.log(`Stopping Docker service ${serviceName} in ${repo}...`, "info")
+            command = `cd ${repoPath} && docker compose stop ${serviceName}`
+            break;
+          case "restart":
+            this.dashboard.log(`Restarting Docker service ${serviceName} in ${repo}...`, "info")
+            command = `cd ${repoPath} && docker compose restart ${serviceName}`
+            break;
+          case "recreate":
+            this.dashboard.log(`Recreating Docker service ${serviceName} in ${repo}...`, "info")
+            command = `cd ${repoPath} && docker compose up -d --force-recreate ${serviceName}`
+            break;
+          case "logs":
+            this.dashboard.log(`Showing logs for Docker service ${serviceName} in ${repo}...`, "info")
+            // For logs, we might want to show them in a box or open a new terminal
+            command = `cd ${repoPath} && docker compose logs --tail=50 ${serviceName}`
+            const { stdout } = await execAsync(command)
+            this.dashboard.log(stdout, "info")
+            return; // Don't refresh for logs
+          case "shell":
+            this.dashboard.log(`Opening shell for Docker service ${serviceName} in ${repo}...`, "info")
+            // This is tricky - might need to spawn a new terminal or pause blessed
+            command = `cd ${repoPath} && docker compose exec ${serviceName} sh`
+            this.dashboard.log(`Run manually: ${command}`, "info")
+            return; // Can't easily do interactive shell
+          default:
+            this.dashboard.log(`Unknown Docker action: ${action}`, "error")
+            return
+        }
+        
+        await execAsync(command)
+        this.dashboard.log(`Successfully completed ${action} on ${serviceName}`, "info")
+        
         // Force refresh to update the status
         await this.performRefresh(true)
       } catch (error) {
-        this.dashboard.log(`Failed to restart Docker service: ${error}`, "error")
+        this.dashboard.log(`Failed to ${action} Docker service: ${error}`, "error")
       }
     })
   }
