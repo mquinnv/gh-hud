@@ -874,6 +874,7 @@ Press '?', '/', or 'Esc' to close...`,
       // Still update the data but don't re-render the screen
       this.workflows = workflows;
       this.pullRequests = pullRequests || [];
+      this.dockerServices = dockerServices || [];
       this.jobsCache = jobs; // Update the cache
       return;
     }
@@ -885,6 +886,7 @@ Press '?', '/', or 'Esc' to close...`,
       // Track changes before updating
       this.trackWorkflowChanges(workflows);
 
+      const previousWorkflowCount = this.workflows.length;
       this.workflows = workflows;
       this.pullRequests = pullRequests || [];
       this.dockerServices = dockerServices || [];
@@ -901,24 +903,30 @@ Press '?', '/', or 'Esc' to close...`,
         lastUpdate: new Date().toLocaleTimeString(),
       });
 
-      // Update PR header if needed
-      if (this.showPRs) {
+      // Update PR header if needed (without recreating if possible)
+      if (this.showPRs && this.prHeaderBox) {
+        // Just update content without recreating the box
+        const prContent = this.formatPRHeader(this.pullRequests);
+        this.prHeaderBox.setContent(prContent);
+      } else if (this.showPRs && !this.prHeaderBox) {
         this.createOrUpdatePRHeader();
-        if (this.pullRequests.length > 0) {
-          this.log(`Loaded ${this.pullRequests.length} open PRs`, "debug");
-        }
       }
 
-      // Update Docker header if needed
-      if (this.showDocker) {
+      // Update Docker header if needed (without recreating if possible)
+      if (this.showDocker && this.dockerHeaderBox) {
+        // Just update content without recreating the box
+        const dockerContent = this.formatDockerHeader(this.dockerServices);
+        this.dockerHeaderBox.setContent(dockerContent);
+      } else if (this.showDocker && !this.dockerHeaderBox) {
         this.createOrUpdateDockerHeader();
-        const totalServices = this.dockerServices.reduce((acc, ds) => acc + ds.services.length, 0);
-        if (totalServices > 0) {
-          this.log(`Monitoring ${totalServices} Docker services`, "debug");
-        }
       }
 
-      this.layoutWorkflows();
+      // Only recreate layout if the number of workflows changed or grid doesn't exist
+      if (workflows.length !== previousWorkflowCount || this.grid.length === 0) {
+        this.layoutWorkflows();
+      }
+      
+      // Always update content
       this.renderWorkflows(workflows, jobs);
     } finally {
       this.uiUpdateInProgress = false;
@@ -941,27 +949,30 @@ Press '?', '/', or 'Esc' to close...`,
     return this.uiUpdateInProgress || this.layoutInProgress;
   }
 
+  private renderTimer?: NodeJS.Immediate;
+  
   private scheduleRender(): void {
-    // Just render immediately - batching might be causing delays
-    if (this.screen) {
-      try {
-        // Use realloc=false to avoid full screen clear
-        (this.screen as any).render(false);
-      } catch (error: unknown) {
-        // Catch and log render errors but don't crash
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        process.stderr.write(
-          `\nRender error: ${errorMessage?.substring(0, 100)}\n`,
-        );
-
-        // Try a simpler render as fallback
+    // Cancel any pending render
+    if (this.renderTimer) {
+      clearImmediate(this.renderTimer);
+    }
+    
+    // Schedule render on next tick to batch updates
+    this.renderTimer = setImmediate(() => {
+      if (this.screen) {
         try {
+          // Use render() without clearing - blessed handles differential updates
           this.screen.render();
-        } catch (_fallbackError) {
-          process.stderr.write(`\nFallback render also failed\n`);
+        } catch (error: unknown) {
+          // Catch and log render errors but don't crash
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          process.stderr.write(
+            `\nRender error: ${errorMessage?.substring(0, 100)}\n`,
+          );
         }
       }
-    }
+      this.renderTimer = undefined;
+    });
   }
 
   private queueKeyEvent(handler: () => void): void {
@@ -1141,13 +1152,18 @@ Press '?', '/', or 'Esc' to close...`,
         jobs.get(`${workflow.id}`) || [],
         isSelected,
       );
-      box.setContent(content);
+      
+      // Only update if content actually changed
+      const currentContent = box.getContent();
+      if (currentContent !== content) {
+        box.setContent(content);
+      }
     });
 
     this.updateStatusBar();
 
-    // Single render call after all updates
-    this.screen.render();
+    // Schedule a single batched render
+    this.scheduleRender();
   }
 
   private formatWorkflowContent(
@@ -1160,10 +1176,20 @@ Press '?', '/', or 'Esc' to close...`,
     // Determine if we should show all steps based on number of workflows
     const showAllSteps = this.workflows.length <= 2;
 
-    // Header with project name and actual branch the workflow is running on
+    // Map of known repo to working directory names (same as PRs)
+    const repoToWorkingDir: Record<string, string> = {
+      "phenixcrm/clean": "phenix",
+      "phenixcrm/phenixcrm": "phenixcrm",
+      // Add more mappings as needed
+    }
+
+    // Get working directory name
+    const fullRepoName = `${workflow.repository.owner}/${workflow.repository.name}`;
+    const projectName = repoToWorkingDir[fullRepoName] || workflow.repository.name;
+
+    // Header with project name (working dir) and actual branch the workflow is running on
     if (isSelected) {
       // Create full-width inverted header block
-      const projectName = workflow.repository.name;
       const branchName = workflow.headBranch;
       const repoLine = ` ${projectName} \ue725 ${branchName}`;
       const runLine = ` ${workflow.workflowName || "CI"} Run #${workflow.runNumber}`;
@@ -1173,7 +1199,6 @@ Press '?', '/', or 'Esc' to close...`,
       lines.push(`{inverse}${repoLine.padEnd(padWidth)}{/inverse}`);
       lines.push(`{inverse}${runLine.padEnd(padWidth)}{/inverse}`);
     } else {
-      const projectName = workflow.repository.name;
       const branchName = workflow.headBranch;
       lines.push(
         `{bold}${projectName} \ue725 ${branchName}{/bold}`,
@@ -1852,6 +1877,13 @@ Press '?', '/', or 'Esc' to close...`,
 
     const lines: string[] = [];
 
+    // Map of known repo to working directory names
+    const repoToWorkingDir: Record<string, string> = {
+      "phenixcrm/clean": "phenix",
+      "phenixcrm/phenixcrm": "phenixcrm",
+      // Add more mappings as needed
+    }
+
     // Group PRs by repository
     const prsByRepo = new Map<string, PullRequest[]>()
     for (const pr of prs) {
@@ -1907,7 +1939,8 @@ Press '?', '/', or 'Esc' to close...`,
         }
 
         // Format: PR# [project] source -> target icon [conflict]
-        const projectName = repo.split("/")[1] || repo;
+        // Use working directory name if we have a mapping, otherwise use repo name
+        const projectName = repoToWorkingDir[repo] || repo.split("/")[1] || repo;
         let prLine = `{cyan-fg}#${pr.number}{/} {gray-fg}[${projectName}]{/gray-fg} ${pr.headRefName} → ${pr.baseRefName} {${statusColor}-fg}${statusIcon}{/}${conflictIndicator}`
         
         // Only add selection highlight if this PR is selected AND we're in PR selection mode

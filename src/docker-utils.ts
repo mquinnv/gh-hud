@@ -249,7 +249,7 @@ export class DockerServiceManager {
   /**
    * Get Docker service status for a compose file
    */
-  private async getComposeStatus(composeFile: string, repo: string): Promise<DockerServiceStatus> {
+  private async getComposeStatus(composeFile: string, _repo: string, workingDir: string): Promise<DockerServiceStatus> {
     const cacheKey = `docker:${composeFile}`
     
     // Check cache
@@ -280,8 +280,9 @@ export class DockerServiceManager {
       
       const services = this.parseDockerComposeOutput(output)
       
+      // Use working directory name instead of repo name
       const status: DockerServiceStatus = {
-        repository: repo,
+        repository: workingDir,  // Use the actual directory name
         composeFile,
         services
       }
@@ -290,7 +291,7 @@ export class DockerServiceManager {
       return status
     } catch (error) {
       return {
-        repository: repo,
+        repository: workingDir,  // Use the actual directory name
         composeFile,
         services: [],
         error: error instanceof Error ? error.message : "Failed to get Docker status"
@@ -335,9 +336,12 @@ export class DockerServiceManager {
           continue
         }
         
+        // Get the actual working directory name (last part of path)
+        const workingDirName = repoPath.split('/').pop() || repo
+        
         for (const composeFile of composeFiles) {
           if (debug) debug(`Getting status for ${composeFile}`)
-          const status = await this.getComposeStatus(composeFile, repo)
+          const status = await this.getComposeStatus(composeFile, repo, workingDirName)
           if (status.error) {
             if (debug) debug(`Error getting status: ${status.error}`)
           } else {
