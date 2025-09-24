@@ -1160,30 +1160,35 @@ Press '?', '/', or 'Esc' to close...`,
     // Determine if we should show all steps based on number of workflows
     const showAllSteps = this.workflows.length <= 2;
 
-    // Header with repo and workflow name - full width inverse bar if selected
+    // Header with project name and actual branch the workflow is running on
     if (isSelected) {
       // Create full-width inverted header block
-      const repoLine = ` ${workflow.repository.owner}/${workflow.repository.name} \ue725 staging`;
-      const runLine = ` CI Run #${workflow.runNumber}`;
+      const projectName = workflow.repository.name;
+      const branchName = workflow.headBranch;
+      const repoLine = ` ${projectName} \ue725 ${branchName}`;
+      const runLine = ` ${workflow.workflowName || "CI"} Run #${workflow.runNumber}`;
 
       // Pad to actual card width minus border (2 chars) and some margin
       const padWidth = Math.max(30, this.currentBoxWidth - 4);
       lines.push(`{inverse}${repoLine.padEnd(padWidth)}{/inverse}`);
       lines.push(`{inverse}${runLine.padEnd(padWidth)}{/inverse}`);
     } else {
+      const projectName = workflow.repository.name;
+      const branchName = workflow.headBranch;
       lines.push(
-        `{bold}${workflow.repository.owner}/${workflow.repository.name} \ue725 staging{/bold}`,
+        `{bold}${projectName} \ue725 ${branchName}{/bold}`,
       );
-      lines.push(`CI Run #{yellow-fg}${workflow.runNumber}{/yellow-fg}`);
+      lines.push(`${workflow.workflowName || "CI"} Run #{yellow-fg}${workflow.runNumber}{/yellow-fg}`);
     }
     lines.push("");
 
-    // Branch and commit info
-    lines.push(`Branch: {yellow-fg}${workflow.headBranch}{/yellow-fg}`);
-    lines.push(`Event: {magenta-fg}${workflow.event}{/magenta-fg}`);
+    // Event and commit info (removed duplicate branch line)
+    lines.push(`Triggered by: {magenta-fg}${workflow.event}{/magenta-fg}`);
     if (workflow.headSha) {
-      lines.push(`SHA: {gray-fg}${workflow.headSha.substring(0, 7)}{/gray-fg}`);
+      lines.push(`Commit: {gray-fg}${workflow.headSha.substring(0, 7)}{/gray-fg}`);
     }
+    // Show repository owner in smaller text if needed
+    lines.push(`Repo: {gray-fg}${workflow.repository.owner}/${workflow.repository.name}{/gray-fg}`);
     lines.push("");
 
     // Status with more detail
