@@ -105,7 +105,7 @@ export class Dashboard {
       },
       style: {
         fg: "cyan",
-        bg: "black",
+        // bg removed - inherit terminal background
         border: {
           fg: "#444444",
         },
@@ -139,7 +139,7 @@ export class Dashboard {
       },
       style: {
         fg: "white",
-        bg: "black",
+        // bg removed - inherit terminal background
         border: {
           fg: "#f0f0f0",
         },
@@ -1888,7 +1888,7 @@ Press '?', '/', or 'Esc' to close...`,
       },
       style: {
         fg: "white",
-        bg: "black",
+        // bg removed - inherit terminal background
         border: {
           fg: "#666666",
         },
@@ -1922,7 +1922,7 @@ Press '?', '/', or 'Esc' to close...`,
       },
       style: {
         fg: "white",
-        bg: "black",
+        // bg removed - inherit terminal background
         border: {
           fg: "#888888",
         },
