@@ -159,6 +159,33 @@ export class App {
         this.dashboard.log(`Failed to cancel workflow: ${error}`, "error")
       }
     })
+
+    // Handle restarting Docker service
+    this.dashboard.onRestartDocker(async (dockerService: any) => {
+      try {
+        const serviceName = dockerService.service.name
+        const repo = dockerService.repo
+        this.dashboard.log(`Restarting Docker service ${serviceName} in ${repo}...`, "info")
+        
+        // Find the repository path
+        const repository = this.repositories.find(r => r.includes(repo))
+        if (!repository) {
+          this.dashboard.log(`Could not find repository path for ${repo}`, "error")
+          return
+        }
+        
+        // Execute docker compose restart command
+        const repoPath = repository.startsWith("/") ? repository : process.cwd()
+        const command = `cd ${repoPath} && docker compose restart ${serviceName}`
+        await execAsync(command)
+        
+        this.dashboard.log(`Successfully restarted ${serviceName}`, "info")
+        // Force refresh to update the status
+        await this.performRefresh(true)
+      } catch (error) {
+        this.dashboard.log(`Failed to restart Docker service: ${error}`, "error")
+      }
+    })
   }
 
   private async performRefresh(_isManual: boolean = false): Promise<void> {

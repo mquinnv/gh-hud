@@ -15,7 +15,9 @@ export class Dashboard {
   private confirmBox?: blessed.Widgets.BoxElement;
   private selectedIndex = 0;
   private selectedPRIndex = 0;
-  private selectionMode: "workflows" | "prs" = "workflows"; // Track which area is selected
+  private selectedDockerIndex = 0;
+  private flatDockerServices: Array<{service: {name: string, state: string, health?: string}, repo: string}> = [];
+  private selectionMode: "workflows" | "prs" | "docker" = "workflows"; // Track which area is selected
   private workflows: WorkflowRun[] = [];
   private pullRequests: PullRequest[] = [];
   private dockerServices: DockerServiceStatus[] = [];
@@ -272,33 +274,61 @@ export class Dashboard {
       this.screen.emit("manual-refresh");
     });
 
-    // 2D Grid Navigation keys (vim-style) with seamless PR/workflow navigation
+    // 2D Grid Navigation keys (vim-style) with seamless Docker/PR/workflow navigation
     this.screen.key(["up", "k", "C-p"], () => {
       this.queueKeyEvent(() => {
         if (this.selectionMode === "workflows") {
-          // If on top row of workflows and PRs exist, move up to PRs
+          // If on top row of workflows, move to PRs or Docker
           const currentCoords = this.indexToCoords(this.selectedIndex);
-          if (currentCoords.row === 0 && this.showPRs && this.pullRequests.length > 0) {
-            this.selectionMode = "prs";
-            // Select rightmost PR if coming from right column
-            if (this.cols > 1 && currentCoords.col > 0) {
-              this.selectedPRIndex = Math.min(currentCoords.col, this.pullRequests.length - 1);
+          if (currentCoords.row === 0) {
+            if (this.showPRs && this.pullRequests.length > 0) {
+              this.selectionMode = "prs";
+              // Select rightmost PR if coming from right column
+              if (this.cols > 1 && currentCoords.col > 0) {
+                this.selectedPRIndex = Math.min(currentCoords.col, this.pullRequests.length - 1);
+              }
+              this.updatePRHighlight();
+              this.highlightSelected();
+            } else if (this.showDocker && this.flatDockerServices.length > 0) {
+              this.selectionMode = "docker";
+              this.updateDockerHighlight();
+              this.highlightSelected();
             }
-            this.updatePRHighlight();
-            this.highlightSelected();
           } else {
             this.navigateGrid("up");
           }
         } else if (this.selectionMode === "prs") {
-          // Already in PR area, just navigate PRs
-          this.navigatePRs("left"); // Up in PRs goes left
+          // From PRs, go up to Docker if it exists
+          if (this.showDocker && this.flatDockerServices.length > 0) {
+            this.selectionMode = "docker";
+            this.updateDockerHighlight();
+            this.updatePRHighlight();
+          } else {
+            // Navigate within PRs
+            this.navigatePRs("left");
+          }
+        } else if (this.selectionMode === "docker") {
+          // Navigate within Docker services
+          this.navigateDocker("left");
         }
       });
     });
 
     this.screen.key(["down", "j", "C-n"], () => {
       this.queueKeyEvent(() => {
-        if (this.selectionMode === "prs") {
+        if (this.selectionMode === "docker") {
+          // Moving down from Docker goes to PRs or workflows
+          if (this.showPRs && this.pullRequests.length > 0) {
+            this.selectionMode = "prs";
+            this.updateDockerHighlight();
+            this.updatePRHighlight();
+          } else {
+            this.selectionMode = "workflows";
+            this.selectedIndex = 0;
+            this.updateDockerHighlight();
+            this.highlightSelected();
+          }
+        } else if (this.selectionMode === "prs") {
           // Moving down from PRs goes to workflows
           this.selectionMode = "workflows";
           // Try to position in the same column if possible
@@ -320,6 +350,8 @@ export class Dashboard {
           this.navigateGrid("left");
         } else if (this.selectionMode === "prs") {
           this.navigatePRs("left");
+        } else if (this.selectionMode === "docker") {
+          this.navigateDocker("left");
         }
       });
     });
@@ -330,11 +362,13 @@ export class Dashboard {
           this.navigateGrid("right");
         } else if (this.selectionMode === "prs") {
           this.navigatePRs("right");
+        } else if (this.selectionMode === "docker") {
+          this.navigateDocker("right");
         }
       });
     });
 
-    // Open workflow or PR in browser
+    // Open workflow/PR in browser or restart Docker service
     this.screen.key(["enter"], () => {
       if (this.selectionMode === "workflows") {
         const workflow = this.workflows[this.selectedIndex];
@@ -345,6 +379,11 @@ export class Dashboard {
         const pr = this.pullRequests[this.selectedPRIndex];
         if (pr) {
           this.screen.emit("open-pr", pr);
+        }
+      } else if (this.selectionMode === "docker" && this.showDocker) {
+        const dockerService = this.flatDockerServices[this.selectedDockerIndex];
+        if (dockerService) {
+          this.screen.emit("restart-docker", dockerService);
         }
       }
     });
@@ -496,6 +535,36 @@ export class Dashboard {
     }
   }
 
+  // Navigate Docker services
+  private navigateDocker(direction: "up" | "down" | "left" | "right"): void {
+    if (this.flatDockerServices.length === 0) return;
+    
+    const currentIndex = this.selectedDockerIndex;
+    let newIndex = currentIndex;
+    
+    switch (direction) {
+      case "left":
+      case "up":
+        newIndex = currentIndex - 1;
+        if (newIndex < 0) {
+          newIndex = this.flatDockerServices.length - 1; // Wrap to end
+        }
+        break;
+      case "right":
+      case "down":
+        newIndex = currentIndex + 1;
+        if (newIndex >= this.flatDockerServices.length) {
+          newIndex = 0; // Wrap to beginning
+        }
+        break;
+    }
+    
+    if (newIndex !== currentIndex) {
+      this.selectedDockerIndex = newIndex;
+      this.updateDockerHighlight();
+    }
+  }
+
   // Update PR header to show selection
   private updatePRHighlight(): void {
     if (!this.prHeaderBox) return;
@@ -507,6 +576,22 @@ export class Dashboard {
     // Update border color based on selection mode
     if (this.prHeaderBox.style?.border) {
       this.prHeaderBox.style.border.fg = this.selectionMode === "prs" ? "cyan" : "#666666";
+    }
+    
+    this.scheduleRender();
+  }
+
+  // Update Docker header to show selection
+  private updateDockerHighlight(): void {
+    if (!this.dockerHeaderBox) return;
+    
+    // Re-render Docker content with selection highlight
+    const dockerContent = this.formatDockerHeader(this.dockerServices);
+    this.dockerHeaderBox.setContent(dockerContent);
+    
+    // Update border color based on selection mode
+    if (this.dockerHeaderBox.style?.border) {
+      this.dockerHeaderBox.style.border.fg = this.selectionMode === "docker" ? "cyan" : "#888888";
     }
     
     this.scheduleRender();
@@ -544,18 +629,9 @@ export class Dashboard {
       switch (direction) {
         case "up":
           newRow = currentCoords.row - 1;
-          // If at top row, check if we can move to PRs
+          // If at top row, don't wrap - stay in place
+          // PR navigation is handled in the keybinding, not here
           if (newRow < 0) {
-            if (this.showPRs && this.pullRequests.length > 0) {
-              // Switch to PR selection mode
-              this.selectionMode = "prs";
-              // Try to maintain column position
-              if (this.cols > 1 && currentCoords.col > 0) {
-                this.selectedPRIndex = Math.min(currentCoords.col, this.pullRequests.length - 1);
-              }
-              this.updatePRHighlight();
-              this.highlightSelected();
-            }
             return;
           }
           break;
@@ -649,19 +725,19 @@ export class Dashboard {
       return;
     }
 
-    // Clear workflow selection if we're in PR mode
-    if (this.selectionMode === "prs") {
-      // Remove highlight from all workflow boxes
-      this.grid.forEach((box, index) => {
-        if (box?.style?.border) {
-          const workflow = this.workflows[index];
-          box.style.border.fg = workflow ? this.getBorderColor(workflow, false) : "#f0f0f0";
-        }
-      });
-      this.lastSelectedIndex = -1;
-      this.scheduleRender();
-      return;
-    }
+  // Clear workflow selection if we're not in workflow mode
+  if (this.selectionMode !== "workflows") {
+    // Remove highlight from all workflow boxes
+    this.grid.forEach((box, index) => {
+      if (box?.style?.border) {
+        const workflow = this.workflows[index];
+        box.style.border.fg = workflow ? this.getBorderColor(workflow, false) : "#f0f0f0";
+      }
+    });
+    this.lastSelectedIndex = -1;
+    this.scheduleRender();
+    return;
+  }
 
     try {
       // Only update the two boxes that changed (old selected and new selected)
@@ -1660,6 +1736,10 @@ Press '?', '/', or 'Esc' to close...`,
     this.screen.on("kill-workflow", callback);
   }
 
+  onRestartDocker(callback: (service: {service: {name: string, state: string, health?: string}, repo: string}) => void): void {
+    this.screen.on("restart-docker", callback);
+  }
+
   showError(message: string): void {
     // Clear existing content
     this.grid.forEach((box) => {
@@ -1865,8 +1945,11 @@ Press '?', '/', or 'Esc' to close...`,
 
     const lines: string[] = []
     
+    // Rebuild flat list of services for navigation
+    this.flatDockerServices = [];
+    
     // Collect all services with simplified format
-    const services: Array<{name: string, icon: string, color: string, repo: string}> = []
+    const services: Array<{name: string, icon: string, color: string, repo: string, state: string, health?: string}> = []
     let hasErrors = false;
 
     for (const status of dockerStatuses) {
@@ -1886,6 +1969,32 @@ Press '?', '/', or 'Esc' to close...`,
       const repoName = status.repository.split("/")[1] || status.repository;
       
       for (const service of status.services) {
+        // Strip project name prefix from service name if present
+        let serviceName = service.name;
+        // Common patterns: projectname-servicename or projectname_servicename
+        const prefixPatterns = [
+          `${repoName}-`,
+          `${repoName}_`,
+          `${repoName.toLowerCase()}-`,
+          `${repoName.toLowerCase()}_`
+        ];
+        for (const prefix of prefixPatterns) {
+          if (serviceName.startsWith(prefix)) {
+            serviceName = serviceName.substring(prefix.length);
+            break;
+          }
+        }
+        
+        // Add to flat list for navigation
+        this.flatDockerServices.push({
+          service: {
+            name: service.name, // Keep original name for restart command
+            state: service.state,
+            health: service.health
+          },
+          repo: repoName
+        });
+        
         let icon = ""
         let color = "white"
 
@@ -1918,7 +2027,7 @@ Press '?', '/', or 'Esc' to close...`,
           color = "gray"
         }
 
-        services.push({name: service.name, icon, color, repo: repoName})
+        services.push({name: serviceName, icon, color, repo: repoName, state: service.state, health: service.health})
       }
     }
 
@@ -1937,12 +2046,22 @@ Press '?', '/', or 'Esc' to close...`,
     }
 
     // Format as compact inline list per repo with left margin
+    let serviceIndex = 0;
     for (const [project, repoServices] of servicesByRepo) {
-      const serviceItems = repoServices.map(s => 
-        `{${s.color}-fg}${s.icon}{/} ${s.name}`
-      ).join("  ") // Two spaces between services
+      const serviceItems = repoServices.map((s, idx) => {
+        const isSelected = this.selectionMode === "docker" && serviceIndex + idx === this.selectedDockerIndex;
+        const serviceText = `{${s.color}-fg}${s.icon}{/} ${s.name}`;
+        
+        if (isSelected) {
+          // Apply inverse to selected service
+          const plainText = `${s.icon} ${s.name}`;
+          return `{inverse}${plainText}{/inverse}`;
+        }
+        return serviceText;
+      }).join("  "); // Two spaces between services
       
-      lines.push(` {gray-fg}[${project}]{/gray-fg} ${serviceItems}`) // 1-space margin
+      lines.push(` {gray-fg}[${project}]{/gray-fg} ${serviceItems}`); // 1-space margin
+      serviceIndex += repoServices.length;
     }
 
     // If we have too many lines, truncate and show count
@@ -2028,12 +2147,14 @@ Press '?', '/', or 'Esc' to close...`,
         const projectName = repoToWorkingDir[repo] || repo.split("/")[1] || repo;
         const prText = `{cyan-fg}PR #${pr.number}{/} {gray-fg}[${projectName}]{/gray-fg} ${pr.headRefName} → ${pr.baseRefName} {${statusColor}-fg}${statusIcon}{/}${conflictIndicator}`
         
-        // Apply inverse to the entire line when selected
+        // Format the PR line
         let prLine: string
         if (isSelected && this.selectionMode === "prs") {
-          // Strip existing color codes from the text for inverse mode to work properly
+          // For selected PR, create plain text and apply inverse to entire padded line
           const plainText = `PR #${pr.number} [${projectName}] ${pr.headRefName} → ${pr.baseRefName} ${statusIcon}${pr.mergeable === "CONFLICTING" ? " ⚠" : ""}`
-          prLine = `{inverse}${plainText}{/inverse}`
+          // Pad the text to a reasonable width before applying inverse
+          const paddedText = plainText.padEnd(Math.min(80, (this.screen.width as number) - 4))
+          prLine = `{inverse}${paddedText}{/inverse}`
         } else {
           prLine = prText
         }
