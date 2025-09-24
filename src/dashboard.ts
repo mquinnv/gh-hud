@@ -1814,24 +1814,25 @@ Press '?', '/', or 'Esc' to close...`,
       return "{center}{gray-fg}No Docker services running{/gray-fg}{/center}"
     }
 
-    // Group by repo for better organization
+    // Group by project (repo name without owner) for better organization
     const servicesByRepo = new Map<string, typeof services>()
     for (const service of services) {
-      if (!servicesByRepo.has(service.repo)) {
-        servicesByRepo.set(service.repo, [])
+      const projectName = service.repo  // Already just the project name from earlier
+      if (!servicesByRepo.has(projectName)) {
+        servicesByRepo.set(projectName, [])
       }
-      servicesByRepo.get(service.repo)?.push(service)
+      servicesByRepo.get(projectName)?.push(service)
     }
 
-    // Format as compact inline list per repo
-    lines.push("{bold}{cyan-fg}Docker:{/cyan-fg}{/bold}")
+    // Format as compact inline list per repo with Docker whale icon
+    lines.push("{bold}{cyan-fg}\uf308{/cyan-fg}{/bold}")  // Docker whale icon from Nerd Fonts
     
-    for (const [repo, repoServices] of servicesByRepo) {
+    for (const [project, repoServices] of servicesByRepo) {
       const serviceItems = repoServices.map(s => 
         `{${s.color}-fg}${s.icon}{/} ${s.name}`
       ).join("  ") // Two spaces between services
       
-      lines.push(`  {gray-fg}[${repo}]{/gray-fg} ${serviceItems}`)
+      lines.push(`  {gray-fg}[${project}]{/gray-fg} ${serviceItems}`)
     }
 
     // If we have too many lines, truncate and show count
@@ -1899,9 +1900,15 @@ Press '?', '/', or 'Esc' to close...`,
           statusColor = "gray"
         }
 
-        // Format as branch flow: PR# icon source -> target
-        const repoName = repo.split("/")[1] || repo;
-        let prLine = `{cyan-fg}#${pr.number}{/} {${statusColor}-fg}${statusIcon}{/} ${pr.headRefName} → ${pr.baseRefName} {gray-fg}[${repoName}]{/gray-fg}`
+        // Add conflict indicator if not mergeable
+        let conflictIndicator = ""
+        if (pr.mergeable === "CONFLICTING") {
+          conflictIndicator = " {red-fg}⚠{/red-fg}"  // Warning triangle for conflicts
+        }
+
+        // Format as branch flow: PR# icon source -> target [conflict]
+        const projectName = repo.split("/")[1] || repo;
+        let prLine = `{cyan-fg}#${pr.number}{/} {${statusColor}-fg}${statusIcon}{/} ${pr.headRefName} → ${pr.baseRefName}${conflictIndicator} {gray-fg}[${projectName}]{/gray-fg}`
         
         // Add selection highlight
         if (isSelected) {
