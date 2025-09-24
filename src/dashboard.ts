@@ -1929,25 +1929,23 @@ Press '?', '/', or 'Esc' to close...`,
       servicesByRepo.get(projectName)?.push(service)
     }
 
-    // Format as compact inline list per repo with Docker whale icon
-    lines.push("{bold}{cyan-fg}\uf308{/cyan-fg}{/bold}")  // Docker whale icon from Nerd Fonts
-    
+    // Format as compact inline list per repo
     for (const [project, repoServices] of servicesByRepo) {
       const serviceItems = repoServices.map(s => 
         `{${s.color}-fg}${s.icon}{/} ${s.name}`
       ).join("  ") // Two spaces between services
       
-      lines.push(`  {gray-fg}[${project}]{/gray-fg} ${serviceItems}`)
+      lines.push(`{gray-fg}[${project}]{/gray-fg} ${serviceItems}`)
     }
 
     // If we have too many lines, truncate and show count
-    const maxLines = 3
-    if (lines.length > maxLines + 1) {
+    const maxLines = 4  // We can show more lines now without the whale
+    if (lines.length > maxLines) {
       const totalServices = services.length
-      lines.splice(maxLines, lines.length, `  {gray-fg}... ${totalServices} services total{/gray-fg}`)
+      lines.splice(maxLines, lines.length, `{gray-fg}... ${totalServices} services total{/gray-fg}`)
     }
 
-    return lines.slice(0, 4).join("\n"); // Limit to 4 lines to fit in 5-height box
+    return lines.join("\n"); // All lines fit in 5-height box now
   }
 
   private formatPRHeader(prs: PullRequest[]): string {
