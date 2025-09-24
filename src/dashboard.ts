@@ -1341,7 +1341,7 @@ Press '?', '/', or 'Esc' to close...`,
       jobs.forEach((job) => {
         const jobIcon = this.getStatusIcon(job.status, job.conclusion);
         const jobColor = this.getStatusColor(job.status, job.conclusion);
-        lines.push(`  {${jobColor}-fg}${jobIcon} ${job.name}{/}`);
+        lines.push(` {${jobColor}-fg}${jobIcon} ${job.name}{/}`);
 
         if (job.steps && job.steps.length > 0) {
           // Show progress for running jobs
@@ -1355,7 +1355,7 @@ Press '?', '/', or 'Esc' to close...`,
             );
 
             lines.push(
-              `    Progress: {cyan-fg}${completedSteps}/${totalSteps} steps{/cyan-fg}`,
+              `   Progress: {cyan-fg}${completedSteps}/${totalSteps} steps{/cyan-fg}`,
             );
 
             if (currentStepIndex >= 0) {
@@ -1404,7 +1404,7 @@ Press '?', '/', or 'Esc' to close...`,
                   }
 
                   lines.push(
-                    `    {${stepColor}-fg}${stepIcon}{/} {gray-fg}${stepNumber}{/} ${step.name}{gray-fg}${duration}{/}`,
+                    `   {${stepColor}-fg}${stepIcon}{/} {gray-fg}${stepNumber}{/} ${step.name}{gray-fg}${duration}{/}`,
                   );
                 } else if (step.status === "in_progress") {
                   // Current running step - highlighted
@@ -1416,13 +1416,13 @@ Press '?', '/', or 'Esc' to close...`,
                     : 0;
 
                   lines.push(
-                    `    {yellow-fg}▶ ${stepNumber} {bold}${step.name}{/bold} (${stepDuration}s){/}`,
+                    `   {yellow-fg}▶ ${stepNumber} {bold}${step.name}{/bold} (${stepDuration}s){/}`,
                   );
                 } else {
                   // Upcoming steps (pending, waiting)
                   const stepIcon = step.status === "waiting" ? "⏳" : "○";
                   lines.push(
-                    `    {gray-fg}${stepIcon} ${stepNumber} ${step.name}{/}`,
+                    `   {gray-fg}${stepIcon} ${stepNumber} ${step.name}{/}`,
                   );
                 }
               }
@@ -1431,7 +1431,7 @@ Press '?', '/', or 'Esc' to close...`,
               if (!showAllSteps && endIndex < job.steps.length) {
                 const remainingSteps = job.steps.length - endIndex;
                 lines.push(
-                  `    {gray-fg}... and ${remainingSteps} more step${remainingSteps > 1 ? "s" : ""}{/}`,
+                  `   {gray-fg}... and ${remainingSteps} more step${remainingSteps > 1 ? "s" : ""}{/}`,
                 );
               }
             }
@@ -1469,14 +1469,14 @@ Press '?', '/', or 'Esc' to close...`,
                 }
 
                 lines.push(
-                  `    {${stepColor}-fg}${stepIcon}{/} {gray-fg}${stepNumber}{/} ${step.name}{gray-fg}${duration}{/}`,
+                  `   {${stepColor}-fg}${stepIcon}{/} {gray-fg}${stepNumber}{/} ${step.name}{gray-fg}${duration}{/}`,
                 );
               });
             } else {
               // Show summary when there's limited space (existing behavior)
               if (job.conclusion === "success") {
                 lines.push(
-                  `    {green-fg}✓ All ${job.steps.length} steps completed{/green-fg}`,
+                  `   {green-fg}✓ All ${job.steps.length} steps completed{/green-fg}`,
                 );
               } else if (job.conclusion === "failure") {
                 const failedStep = job.steps.find(
@@ -1484,7 +1484,7 @@ Press '?', '/', or 'Esc' to close...`,
                 );
                 if (failedStep) {
                   lines.push(
-                    `    {red-fg}✗ Failed at: ${failedStep.name}{/red-fg}`,
+                    `   {red-fg}✗ Failed at: ${failedStep.name}{/red-fg}`,
                   );
                 }
               }
@@ -1498,16 +1498,16 @@ Press '?', '/', or 'Esc' to close...`,
           ) {
             if (job.steps && job.steps.length > 0) {
               lines.push(
-                `    {gray-fg}Queued - ${job.steps.length} steps pending{/gray-fg}`,
+                `   {gray-fg}Queued - ${job.steps.length} steps pending{/gray-fg}`,
               );
               job.steps.forEach((step, index) => {
                 const stepNumber = `${index + 1}/${job.steps?.length}`;
                 lines.push(
-                  `    {gray-fg}○ ${stepNumber} ${step.name}{/gray-fg}`,
+                  `   {gray-fg}○ ${stepNumber} ${step.name}{/gray-fg}`,
                 );
               });
             } else {
-              lines.push(`    {gray-fg}Waiting to start...{/gray-fg}`);
+              lines.push(`   {gray-fg}Waiting to start...{/gray-fg}`);
             }
           }
         }
@@ -1929,20 +1929,20 @@ Press '?', '/', or 'Esc' to close...`,
       servicesByRepo.get(projectName)?.push(service)
     }
 
-    // Format as compact inline list per repo
+    // Format as compact inline list per repo with left margin
     for (const [project, repoServices] of servicesByRepo) {
       const serviceItems = repoServices.map(s => 
         `{${s.color}-fg}${s.icon}{/} ${s.name}`
       ).join("  ") // Two spaces between services
       
-      lines.push(`{gray-fg}[${project}]{/gray-fg} ${serviceItems}`)
+      lines.push(` {gray-fg}[${project}]{/gray-fg} ${serviceItems}`) // 1-space margin
     }
 
     // If we have too many lines, truncate and show count
     const maxLines = 4  // We can show more lines now without the whale
     if (lines.length > maxLines) {
       const totalServices = services.length
-      lines.splice(maxLines, lines.length, `{gray-fg}... ${totalServices} services total{/gray-fg}`)
+      lines.splice(maxLines, lines.length, ` {gray-fg}... ${totalServices} services total{/gray-fg}`) // 1-space margin
     }
 
     return lines.join("\n"); // All lines fit in 5-height box now
@@ -2051,16 +2051,16 @@ Press '?', '/', or 'Esc' to close...`,
       ) {
         const left = leftColumn[i] || ""
         const right = rightColumn[i] || ""
-        // Simple two column layout - left takes up to 80 chars, right gets the rest
-        lines.push(`${left.padEnd(Math.min(80, screenWidth / 2))} ${right}`)
+        // Simple two column layout with left margin - left takes up to 80 chars, right gets the rest
+        lines.push(` ${left.padEnd(Math.min(80, screenWidth / 2))} ${right}`)  // 1-space margin
       }
     } else {
-      // Single column layout - now we can show 4 PRs since we removed the header
+      // Single column layout with left margin - now we can show 4 PRs since we removed the header
       for (const prLine of prLines.slice(0, 4)) {
-        lines.push(prLine)
+        lines.push(` ${prLine}`)  // 1-space margin
       }
       if (prLines.length > 4) {
-        lines.push(`{gray-fg}... and ${prLines.length - 4} more{/gray-fg}`)
+        lines.push(` {gray-fg}... and ${prLines.length - 4} more{/gray-fg}`)  // 1-space margin
       }
     }
 
