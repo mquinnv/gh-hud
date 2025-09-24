@@ -2054,8 +2054,8 @@ Press '?', '/', or 'Esc' to close...`,
         const serviceText = `{${s.color}-fg}${s.icon}{/} ${s.name}`;
         
         if (isSelected) {
-          // Apply inverse to selected service
-          const plainText = `${s.icon} ${s.name}`;
+          // Apply inverse to selected service with padding for button-like appearance
+          const plainText = ` ${s.icon} ${s.name} `; // Added spaces on both sides
           return `{inverse}${plainText}{/inverse}`;
         }
         return serviceText;
