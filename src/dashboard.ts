@@ -1846,12 +1846,10 @@ Press '?', '/', or 'Esc' to close...`,
 
   private formatPRHeader(prs: PullRequest[]): string {
     if (prs.length === 0) {
-      return "{center}{gray-fg}No open pull requests{/gray-fg}{/center}";
+      return "{center}{gray-fg}No open pull requests{/gray-fg}{/center}"
     }
 
     const lines: string[] = [];
-    lines.push("{bold}{yellow-fg}Open Pull Requests:{/yellow-fg}{/bold}")
-    lines.push("")
 
     // Group PRs by repository
     const prsByRepo = new Map<string, PullRequest[]>()
@@ -1927,35 +1925,34 @@ Press '?', '/', or 'Esc' to close...`,
     }
 
     // Show up to 2 PRs horizontally if space allows, otherwise just list them
-    const screenWidth = this.screen.width as number;
+    const screenWidth = this.screen.width as number
     if (screenWidth > 160 && prLines.length >= 2) {
       // Two column layout
-      const half = Math.ceil(prLines.length / 2);
-      const leftColumn = prLines.slice(0, half);
-      const rightColumn = prLines.slice(half);
+      const half = Math.ceil(prLines.length / 2)
+      const leftColumn = prLines.slice(0, half)
+      const rightColumn = prLines.slice(half)
 
       for (
         let i = 0;
         i < Math.max(leftColumn.length, rightColumn.length);
         i++
       ) {
-        const left = leftColumn[i] || "";
-        const right = rightColumn[i] || "";
+        const left = leftColumn[i] || ""
+        const right = rightColumn[i] || ""
         // Simple two column layout - left takes up to 80 chars, right gets the rest
-        lines.push(`  ${left.padEnd(Math.min(80, screenWidth / 2))} ${right}`);
+        lines.push(`${left.padEnd(Math.min(80, screenWidth / 2))} ${right}`)
       }
     } else {
-      // Single column layout
-      for (const prLine of prLines.slice(0, 3)) {
-        // Show max 3 PRs in header to save space
-        lines.push(`  ${prLine}`);
+      // Single column layout - now we can show 4 PRs since we removed the header
+      for (const prLine of prLines.slice(0, 4)) {
+        lines.push(prLine)
       }
-      if (prLines.length > 3) {
-        lines.push(`  {gray-fg}... and ${prLines.length - 3} more{/gray-fg}`);
+      if (prLines.length > 4) {
+        lines.push(`{gray-fg}... and ${prLines.length - 4} more{/gray-fg}`)
       }
     }
 
-    return lines.slice(0, 4).join("\n"); // Limit to 4 lines to fit in 5-height box with border
+    return lines.join("\n"); // All lines available for PRs now
   }
 
   log(
