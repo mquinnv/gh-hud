@@ -141,6 +141,24 @@ export class App {
     this.dashboard.onDismissAllCompleted((workflows: WorkflowRun[]) => {
       this.dismissAllCompletedWorkflows(workflows)
     })
+
+    // Handle killing/cancelling workflow
+    this.dashboard.onKillWorkflow(async (workflow: WorkflowRun) => {
+      try {
+        const repoName = `${workflow.repository.owner}/${workflow.repository.name}`
+        this.dashboard.log(`Cancelling workflow run ${workflow.id} in ${repoName}...`, "info")
+        
+        // Execute gh command to cancel the workflow
+        const command = `gh run cancel ${workflow.id} -R ${repoName}`
+        await execAsync(command)
+        
+        this.dashboard.log(`Successfully cancelled workflow run ${workflow.id}`, "info")
+        // Force refresh to update the status
+        await this.performRefresh(true)
+      } catch (error) {
+        this.dashboard.log(`Failed to cancel workflow: ${error}`, "error")
+      }
+    })
   }
 
   private async performRefresh(_isManual: boolean = false): Promise<void> {

@@ -12,6 +12,7 @@ export class Dashboard {
   private prHeaderBox?: blessed.Widgets.BoxElement;
   private dockerHeaderBox?: blessed.Widgets.BoxElement;
   private helpBox?: blessed.Widgets.BoxElement;
+  private confirmBox?: blessed.Widgets.BoxElement;
   private selectedIndex = 0;
   private selectedPRIndex = 0;
   private selectionMode: "workflows" | "prs" = "workflows"; // Track which area is selected
@@ -338,6 +339,14 @@ export class Dashboard {
       const workflow = this.workflows[this.selectedIndex];
       if (workflow && workflow.status === "completed") {
         this.screen.emit("dismiss-workflow", workflow);
+      }
+    });
+
+    // Kill/cancel running workflow
+    this.screen.key(["k"], () => {
+      const workflow = this.workflows[this.selectedIndex];
+      if (workflow && (workflow.status === "in_progress" || workflow.status === "queued")) {
+        this.showKillConfirmation(workflow);
       }
     });
 
@@ -732,6 +741,7 @@ export class Dashboard {
   r       - Force refresh
   d       - Dismiss completed workflow
   D       - Dismiss ALL completed workflows
+  k       - Kill/cancel running workflow
   ?       - Show this help
   q/Ctrl+C - Quit
 
@@ -829,6 +839,72 @@ Press '?', '/', or 'Esc' to close...`,
         process.stderr.write(`\nIgnoring help close render error\n`);
       }
     }
+  }
+
+  private showKillConfirmation(workflow: WorkflowRun): void {
+    // Create confirmation dialog
+    if (this.confirmBox) {
+      this.confirmBox.destroy();
+    }
+
+    const projectName = `${workflow.repository.owner}/${workflow.repository.name}`;
+    
+    this.confirmBox = blessed.box({
+      parent: this.screen,
+      top: "center",
+      left: "center",
+      width: 60,
+      height: 10,
+      content: `{center}{bold}{red-fg}Cancel Workflow?{/red-fg}{/bold}{/center}
+
+{center}${projectName}{/center}
+{center}${workflow.workflowName || "Workflow"} Run #${workflow.runNumber}{/center}
+{center}Branch: ${workflow.headBranch}{/center}
+
+{center}{bold}Press 'y' to confirm, 'n' or ESC to cancel{/bold}{/center}`,
+      tags: true,
+      border: {
+        type: "line",
+      },
+      style: {
+        fg: "white",
+        bg: "black",
+        border: {
+          fg: "red",
+        },
+      },
+      keys: true,
+    });
+
+    this.modalOpen = true;
+    this.confirmBox.show();
+    this.confirmBox.setFront();
+    this.confirmBox.focus();
+
+    // Handle confirmation
+    const confirmHandler = (_ch: any, key: any) => {
+      if (key && (key.name === "y" || key.name === "Y")) {
+        // User confirmed
+        this.hideKillConfirmation();
+        this.screen.emit("kill-workflow", workflow);
+      } else if (key && (key.name === "n" || key.name === "N" || key.name === "escape")) {
+        // User cancelled
+        this.hideKillConfirmation();
+      }
+    };
+
+    this.confirmBox.once("keypress", confirmHandler);
+    
+    this.screen.render();
+  }
+
+  private hideKillConfirmation(): void {
+    this.modalOpen = false;
+    if (this.confirmBox) {
+      this.confirmBox.destroy();
+      this.confirmBox = undefined;
+    }
+    this.scheduleRender();
   }
 
   private showInitialState(): void {
@@ -1573,6 +1649,10 @@ Press '?', '/', or 'Esc' to close...`,
     this.screen.on("open-pr", callback);
   }
 
+  onKillWorkflow(callback: (workflow: WorkflowRun) => void): void {
+    this.screen.on("kill-workflow", callback);
+  }
+
   showError(message: string): void {
     // Clear existing content
     this.grid.forEach((box) => {
@@ -1941,11 +2021,16 @@ Press '?', '/', or 'Esc' to close...`,
         // Format: PR# [project] source -> target icon [conflict]
         // Use working directory name if we have a mapping, otherwise use repo name
         const projectName = repoToWorkingDir[repo] || repo.split("/")[1] || repo;
-        let prLine = `{cyan-fg}#${pr.number}{/} {gray-fg}[${projectName}]{/gray-fg} ${pr.headRefName} → ${pr.baseRefName} {${statusColor}-fg}${statusIcon}{/}${conflictIndicator}`
+        const prText = `{cyan-fg}PR #${pr.number}{/} {gray-fg}[${projectName}]{/gray-fg} ${pr.headRefName} → ${pr.baseRefName} {${statusColor}-fg}${statusIcon}{/}${conflictIndicator}`
         
-        // Only add selection highlight if this PR is selected AND we're in PR selection mode
+        // Apply inverse to the entire line when selected
+        let prLine: string
         if (isSelected && this.selectionMode === "prs") {
-          prLine = `{inverse}${prLine}{/inverse}`
+          // Strip existing color codes from the text for inverse mode to work properly
+          const plainText = `PR #${pr.number} [${projectName}] ${pr.headRefName} → ${pr.baseRefName} ${statusIcon}${pr.mergeable === "CONFLICTING" ? " ⚠" : ""}`
+          prLine = `{inverse}${plainText}{/inverse}`
+        } else {
+          prLine = prText
         }
         
         prLines.push(prLine)
