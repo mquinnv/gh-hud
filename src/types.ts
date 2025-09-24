@@ -50,6 +50,9 @@ export interface WorkflowJob {
   startedAt?: string
   completedAt?: string
   steps?: WorkflowStep[]
+  runner_name?: string
+  runner_id?: number
+  runner_group_name?: string
 }
 
 export interface WorkflowStep {

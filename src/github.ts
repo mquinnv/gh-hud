@@ -111,14 +111,27 @@ export class GitHubService {
     if (cached) return cached
 
     try {
+      // Use the GitHub API directly to get runner information
       const { stdout } = await execa(
         "gh",
-        ["run", "view", runId.toString(), "--repo", repo, "--json", "jobs"],
+        ["api", `repos/${repo}/actions/runs/${runId}/jobs`],
         { timeout: 10000 },
       )
 
       const data = JSON.parse(stdout)
-      const jobs: WorkflowJob[] = data.jobs || []
+      const jobs: WorkflowJob[] = (data.jobs || []).map((job: any) => ({
+        id: job.id,
+        runId: job.run_id,
+        name: job.name,
+        status: job.status,
+        conclusion: job.conclusion,
+        startedAt: job.started_at,
+        completedAt: job.completed_at,
+        steps: job.steps,
+        runner_name: job.runner_name,
+        runner_id: job.runner_id,
+        runner_group_name: job.runner_group_name,
+      }))
 
       this.setCache(cacheKey, jobs)
       return jobs

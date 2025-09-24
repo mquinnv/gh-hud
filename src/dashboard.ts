@@ -1424,7 +1424,8 @@ Press '?', '/', or 'Esc' to close...`,
       jobs.forEach((job) => {
         const jobIcon = this.getStatusIcon(job.status, job.conclusion);
         const jobColor = this.getStatusColor(job.status, job.conclusion);
-        lines.push(` {${jobColor}-fg}${jobIcon} ${job.name}{/}`);
+        const runnerInfo = job.runner_name ? ` {gray-fg}[${job.runner_name}]{/}` : "";
+        lines.push(` {${jobColor}-fg}${jobIcon} ${job.name}{/}${runnerInfo}`);
 
         if (job.steps && job.steps.length > 0) {
           // Show progress for running jobs
