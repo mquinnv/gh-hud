@@ -1906,12 +1906,12 @@ Press '?', '/', or 'Esc' to close...`,
           conflictIndicator = " {red-fg}⚠{/red-fg}"  // Warning triangle for conflicts
         }
 
-        // Format as branch flow: PR# icon source -> target [conflict]
+        // Format: PR# [project] source -> target icon [conflict]
         const projectName = repo.split("/")[1] || repo;
-        let prLine = `{cyan-fg}#${pr.number}{/} {${statusColor}-fg}${statusIcon}{/} ${pr.headRefName} → ${pr.baseRefName}${conflictIndicator} {gray-fg}[${projectName}]{/gray-fg}`
+        let prLine = `{cyan-fg}#${pr.number}{/} {gray-fg}[${projectName}]{/gray-fg} ${pr.headRefName} → ${pr.baseRefName} {${statusColor}-fg}${statusIcon}{/}${conflictIndicator}`
         
-        // Add selection highlight
-        if (isSelected) {
+        // Only add selection highlight if this PR is selected AND we're in PR selection mode
+        if (isSelected && this.selectionMode === "prs") {
           prLine = `{inverse}${prLine}{/inverse}`
         }
         
