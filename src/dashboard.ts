@@ -1861,58 +1861,47 @@ Press '?', '/', or 'Esc' to close...`,
       prsByRepo.get(key)?.push(pr)
     }
 
-    // Format each PR with status indicators
+    // Format each PR as branch flow
     const prLines: string[] = [];
     let currentIndex = 0;
     for (const [repo, repoPrs] of prsByRepo) {
       for (const pr of repoPrs) {
         const isSelected = this.selectionMode === "prs" && currentIndex === this.selectedPRIndex;
-        let statusIcon = "";
-        let statusColor = "white";
+        let statusIcon = ""
+        let statusColor = "white"
 
-        // Check status
+        // Check status for icon
         if (pr.statusCheckRollup) {
           switch (pr.statusCheckRollup.state) {
             case "SUCCESS":
-              statusIcon = "✓";
-              statusColor = "green";
+              statusIcon = "✓"
+              statusColor = "green"
               break;
             case "FAILURE":
             case "ERROR":
-              statusIcon = "✗";
-              statusColor = "red";
+              statusIcon = "✗"
+              statusColor = "red"
               break;
             case "PENDING":
             case "EXPECTED":
-              statusIcon = "●";
-              statusColor = "yellow";
+              statusIcon = "●"
+              statusColor = "yellow"
               break;
           }
         } else {
-          statusIcon = "○";
-          statusColor = "gray";
+          statusIcon = "○"
+          statusColor = "gray"
         }
 
-        // Check review status
-        let reviewIcon = "";
-        if (pr.reviewDecision === "APPROVED") {
-          reviewIcon = " {green-fg}✓{/green-fg}";
-        } else if (pr.reviewDecision === "CHANGES_REQUESTED") {
-          reviewIcon = " {red-fg}⊗{/red-fg}";
+        // Add draft indicator to status icon if needed
+        if (pr.draft || pr.isDraft) {
+          statusIcon = "◐" // Half-circle for draft
+          statusColor = "gray"
         }
 
-        // Check merge conflicts
-        let conflictIcon = "";
-        if (pr.mergeable === "CONFLICTING") {
-          conflictIcon = " {red-fg}⚠{/red-fg}";
-        }
-
-        // Draft indicator
-        const draftIndicator =
-          pr.draft || pr.isDraft ? "{gray-fg}[DRAFT]{/gray-fg} " : "";
-
-        // Format the PR line with selection highlight
-        let prLine = `{${statusColor}-fg}${statusIcon}{/} ${draftIndicator}{cyan-fg}#${pr.number}{/} ${pr.title.substring(0, 50)} {gray-fg}(${pr.headRefName}){/gray-fg}${reviewIcon}${conflictIcon} {gray-fg}[${repo}]{/gray-fg}`
+        // Format as branch flow: source -> target
+        const repoName = repo.split("/")[1] || repo;
+        let prLine = `{${statusColor}-fg}${statusIcon}{/} ${pr.headRefName} → ${pr.baseRefName} {gray-fg}#${pr.number}{/} {gray-fg}[${repoName}]{/gray-fg}`
         
         // Add selection highlight
         if (isSelected) {
