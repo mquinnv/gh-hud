@@ -1603,15 +1603,16 @@ Press '?', '/', or 'Esc' to close...`,
     }
     line1 += ` | Total: ${this.workflows.length}`;
 
-    // Line 2: Keyboard shortcuts
+    // Line 2: Keyboard shortcuts - more compact without obvious labels
     const shortcuts = [
-      "?: help",
-      "q: quit",
-      "↑↓←→: nav",
+      "?",
+      "q",
+      "↑↓←→",
       "Enter: open",
+      "Tab: switch",
       "d/D: dismiss",
+      "k: kill",
       "F9: log",
-      "F10: level",
     ];
     const line2 = shortcuts.join(" | ");
 
