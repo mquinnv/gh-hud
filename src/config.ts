@@ -21,19 +21,38 @@ export class ConfigManager {
   // Try to detect the current directory's GitHub repository
   private async getCurrentRepo(): Promise<string | null> {
     try {
+      // Try using gh CLI first (most reliable)
+      try {
+        const { stdout } = await execa("gh", ["repo", "view", "--json", "owner,name"], { timeout: 2000 })
+        const repoInfo = JSON.parse(stdout)
+        if (repoInfo.owner && repoInfo.name) {
+          return `${repoInfo.owner.login}/${repoInfo.name}`
+        }
+      } catch {
+        // Fall back to git remote parsing
+      }
+
       // Check if we're in a git repository
       await execa("git", ["rev-parse", "--git-dir"])
 
       // Get the GitHub remote URL
       const { stdout } = await execa("git", ["remote", "get-url", "origin"])
 
-      // Parse GitHub repo from URL
+      // Parse GitHub repo from URL with improved regex
       // Handles: https://github.com/owner/repo.git
       //          git@github.com:owner/repo.git
       //          gh:owner/repo
-      const match = stdout.match(/github\.com[:/]([^/]+\/[^/.]+)(\.git)?$/)
-      if (match) {
-        return match[1]
+      const patterns = [
+        /github\.com[:/]([^/]+)\/([^/.]+)(?:\.git)?$/,  // Standard format
+        /github\.com:([^/]+)\/([^/.]+)(?:\.git)?$/,     // SSH format
+        /^git@github\.com:([^/]+)\/([^/.]+)(?:\.git)?$/, // Full SSH format
+      ]
+      
+      for (const pattern of patterns) {
+        const match = stdout.match(pattern)
+        if (match) {
+          return `${match[1]}/${match[2]}`
+        }
       }
 
       return null

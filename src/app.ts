@@ -142,8 +142,12 @@ export class App {
 
       // Fetch Docker services if requested
       if (this.showDocker) {
-        this.dockerServices = await this.dockerService.getAllDockerStatus(this.repositories)
-        this.dashboard.log(`Found ${this.dockerServices.length} docker-compose configurations`, "debug")
+        this.dockerServices = await this.dockerService.getAllDockerStatus(
+          this.repositories,
+          (msg) => this.dashboard.log(msg, "debug")
+        )
+        const totalServices = this.dockerServices.reduce((acc, ds) => acc + ds.services.length, 0)
+        this.dashboard.log(`Found ${this.dockerServices.length} compose files, ${totalServices} total services`, "info")
       }
 
       // Update watched and completed trackers
