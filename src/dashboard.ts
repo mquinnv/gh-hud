@@ -272,28 +272,43 @@ export class Dashboard {
       this.screen.emit("manual-refresh");
     });
 
-    // Tab key to switch between PR area and workflows
-    this.screen.key(["tab"], () => {
-      this.queueKeyEvent(() => this.switchSelectionMode());
-    });
-
-    // 2D Grid Navigation keys (vim-style)
+    // 2D Grid Navigation keys (vim-style) with seamless PR/workflow navigation
     this.screen.key(["up", "k", "C-p"], () => {
       this.queueKeyEvent(() => {
         if (this.selectionMode === "workflows") {
-          this.navigateGrid("up");
+          // If on top row of workflows and PRs exist, move up to PRs
+          const currentCoords = this.indexToCoords(this.selectedIndex);
+          if (currentCoords.row === 0 && this.showPRs && this.pullRequests.length > 0) {
+            this.selectionMode = "prs";
+            // Select rightmost PR if coming from right column
+            if (this.cols > 1 && currentCoords.col > 0) {
+              this.selectedPRIndex = Math.min(currentCoords.col, this.pullRequests.length - 1);
+            }
+            this.updatePRHighlight();
+            this.highlightSelected();
+          } else {
+            this.navigateGrid("up");
+          }
         } else if (this.selectionMode === "prs") {
-          this.navigatePRs("up");
+          // Already in PR area, just navigate PRs
+          this.navigatePRs("left"); // Up in PRs goes left
         }
       });
     });
 
     this.screen.key(["down", "j", "C-n"], () => {
       this.queueKeyEvent(() => {
-        if (this.selectionMode === "workflows") {
+        if (this.selectionMode === "prs") {
+          // Moving down from PRs goes to workflows
+          this.selectionMode = "workflows";
+          // Try to position in the same column if possible
+          const targetCol = Math.min(this.selectedPRIndex, this.cols - 1);
+          const targetIndex = Math.min(targetCol, this.workflows.length - 1);
+          this.selectedIndex = targetIndex;
+          this.updatePRHighlight();
+          this.highlightSelected();
+        } else if (this.selectionMode === "workflows") {
           this.navigateGrid("down");
-        } else if (this.selectionMode === "prs") {
-          this.navigatePRs("down");
         }
       });
     });
@@ -450,24 +465,6 @@ export class Dashboard {
     return index >= 0 && index < this.workflows.length;
   }
 
-  // Switch between PR and workflow selection modes
-  private switchSelectionMode(): void {
-    if (!this.showPRs) return; // Can't switch if PRs aren't shown
-    
-    if (this.selectionMode === "workflows") {
-      if (this.pullRequests.length > 0) {
-        this.selectionMode = "prs";
-        this.log("Switched to PR selection mode (Tab to switch back)", "debug");
-        this.updatePRHighlight();
-        this.highlightSelected(); // Remove workflow highlight
-      }
-    } else {
-      this.selectionMode = "workflows";
-      this.log("Switched to workflow selection mode", "debug");
-      this.updatePRHighlight();
-      this.highlightSelected(); // Restore workflow highlight
-    }
-  }
 
   // Navigate PRs
   private navigatePRs(direction: "up" | "down" | "left" | "right"): void {
@@ -547,8 +544,18 @@ export class Dashboard {
       switch (direction) {
         case "up":
           newRow = currentCoords.row - 1;
-          // If at top row, don't wrap - stay in place
+          // If at top row, check if we can move to PRs
           if (newRow < 0) {
+            if (this.showPRs && this.pullRequests.length > 0) {
+              // Switch to PR selection mode
+              this.selectionMode = "prs";
+              // Try to maintain column position
+              if (this.cols > 1 && currentCoords.col > 0) {
+                this.selectedPRIndex = Math.min(currentCoords.col, this.pullRequests.length - 1);
+              }
+              this.updatePRHighlight();
+              this.highlightSelected();
+            }
             return;
           }
           break;
@@ -1609,7 +1616,6 @@ Press '?', '/', or 'Esc' to close...`,
       "q",
       "↑↓←→",
       "Enter: open",
-      "Tab: switch",
       "d/D: dismiss",
       "k: kill",
       "F9: log",
