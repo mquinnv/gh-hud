@@ -30,26 +30,29 @@ export class GitHubService {
     }
   }
 
-  async listWorkflowRuns(repo: string, limit = 20): Promise<WorkflowRun[]> {
+  async listWorkflowRuns(repo: string, limit = 20, before?: string): Promise<WorkflowRun[]> {
     const cacheKey = `runs:${repo}`
     const cached = this.getFromCache<WorkflowRun[]>(cacheKey)
     if (cached) return cached
 
     try {
-      const { stdout } = await execa(
-        "gh",
-        [
-          "run",
-          "list",
-          "--repo",
-          repo,
-          "--limit",
-          limit.toString(),
-          "--json",
-          "databaseId,name,headBranch,headSha,number,event,status,conclusion,workflowDatabaseId,workflowName,url,createdAt,updatedAt,startedAt",
-        ],
-        { timeout: 10000 },
-      )
+      const args = [
+        "run",
+        "list",
+        "--repo",
+        repo,
+        "--limit",
+        limit.toString(),
+        "--json",
+        "databaseId,name,headBranch,headSha,number,event,status,conclusion,workflowDatabaseId,workflowName,url,createdAt,updatedAt,startedAt",
+      ]
+
+      // Add created before filter for resurrect feature
+      if (before) {
+        args.push("--created", `<${before}`)
+      }
+
+      const { stdout } = await execa("gh", args, { timeout: 10000 })
 
       const runs = JSON.parse(stdout)
       const [owner, name] = repo.split("/")
@@ -112,11 +115,9 @@ export class GitHubService {
 
     try {
       // Use the GitHub API directly to get runner information
-      const { stdout } = await execa(
-        "gh",
-        ["api", `repos/${repo}/actions/runs/${runId}/jobs`],
-        { timeout: 10000 },
-      )
+      const { stdout } = await execa("gh", ["api", `repos/${repo}/actions/runs/${runId}/jobs`], {
+        timeout: 10000,
+      })
 
       const data = JSON.parse(stdout)
       const jobs: WorkflowJob[] = (data.jobs || []).map((job: any) => ({
@@ -165,8 +166,27 @@ export class GitHubService {
       allRuns.push(...runs)
     }
 
-    // Sort by most recently updated
-    return allRuns.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    // Sort by creation time (most recent first) for stable chronological ordering
+    return allRuns.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  }
+
+  async getOlderWorkflows(
+    repos: string[],
+    beforeTimestamp: string,
+    limit = 1,
+  ): Promise<WorkflowRun[]> {
+    const allRuns: WorkflowRun[] = []
+
+    for (const repo of repos) {
+      const runs = await this.listWorkflowRuns(repo, limit, beforeTimestamp)
+      allRuns.push(...runs)
+    }
+
+    // Sort by creation time and return only the most recent older workflows
+    const sortedRuns = allRuns.sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    )
+    return sortedRuns.slice(0, limit)
   }
 
   private getFromCache<T>(key: string): T | null {
@@ -279,7 +299,7 @@ export class GitHubService {
       allPRs.push(...prs)
     }
 
-    // Sort by most recently updated
-    return allPRs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    // Sort by creation time (most recent first) for stable chronological ordering
+    return allPRs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
   }
 }

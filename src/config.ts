@@ -23,7 +23,9 @@ export class ConfigManager {
     try {
       // Try using gh CLI first (most reliable)
       try {
-        const { stdout } = await execa("gh", ["repo", "view", "--json", "owner,name"], { timeout: 2000 })
+        const { stdout } = await execa("gh", ["repo", "view", "--json", "owner,name"], {
+          timeout: 2000,
+        })
         const repoInfo = JSON.parse(stdout)
         if (repoInfo.owner && repoInfo.name) {
           return `${repoInfo.owner.login}/${repoInfo.name}`
@@ -43,11 +45,11 @@ export class ConfigManager {
       //          git@github.com:owner/repo.git
       //          gh:owner/repo
       const patterns = [
-        /github\.com[:/]([^/]+)\/([^/.]+)(?:\.git)?$/,  // Standard format
-        /github\.com:([^/]+)\/([^/.]+)(?:\.git)?$/,     // SSH format
+        /github\.com[:/]([^/]+)\/([^/.]+)(?:\.git)?$/, // Standard format
+        /github\.com:([^/]+)\/([^/.]+)(?:\.git)?$/, // SSH format
         /^git@github\.com:([^/]+)\/([^/.]+)(?:\.git)?$/, // Full SSH format
       ]
-      
+
       for (const pattern of patterns) {
         const match = stdout.match(pattern)
         if (match) {
@@ -133,7 +135,9 @@ export class ConfigManager {
         if (dashboard) dashboard.log(`Fetching repositories for org: ${org}`, "debug")
         const orgRepos = await Promise.race([
           githubService.listRepositories(org),
-          new Promise<Repository[]>((_, reject) => setTimeout(() => reject(new Error("Timeout")), 15000)),
+          new Promise<Repository[]>((_, reject) =>
+            setTimeout(() => reject(new Error("Timeout")), 15000),
+          ),
         ])
         for (const repo of orgRepos) {
           repos.add(repo.fullName)

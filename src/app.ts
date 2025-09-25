@@ -23,6 +23,7 @@ export class App {
   private pullRequests: PullRequest[] = []
   private showDocker = false
   private dockerServices: DockerServiceStatus[] = []
+  private oldestWorkflowTimestamp?: string // Track the oldest workflow timestamp for resurrect feature
 
   constructor() {
     this.githubService = new GitHubService()
@@ -142,16 +143,21 @@ export class App {
       this.dismissAllCompletedWorkflows(workflows)
     })
 
+    // Handle resurrect older workflow
+    this.dashboard.onResurrectWorkflow(() => {
+      this.resurrectOldestWorkflow()
+    })
+
     // Handle killing/cancelling workflow
     this.dashboard.onKillWorkflow(async (workflow: WorkflowRun) => {
       try {
         const repoName = `${workflow.repository.owner}/${workflow.repository.name}`
         this.dashboard.log(`Cancelling workflow run ${workflow.id} in ${repoName}...`, "info")
-        
+
         // Execute gh command to cancel the workflow
         const command = `gh run cancel ${workflow.id} -R ${repoName}`
         await execAsync(command)
-        
+
         this.dashboard.log(`Successfully cancelled workflow run ${workflow.id}`, "info")
         // Force refresh to update the status
         await this.performRefresh(true)
@@ -165,59 +171,184 @@ export class App {
       try {
         const serviceName = dockerService.service.name
         const repo = dockerService.repo
-        
+
         // Find the repository path
-        const repository = this.repositories.find(r => r.includes(repo))
+        const repository = this.repositories.find((r) => r.includes(repo))
         if (!repository) {
           this.dashboard.log(`Could not find repository path for ${repo}`, "error")
           return
         }
-        
+
         const repoPath = repository.startsWith("/") ? repository : process.cwd()
         let command = ""
-        
-        switch(action) {
+
+        switch (action) {
           case "start":
             this.dashboard.log(`Starting Docker service ${serviceName} in ${repo}...`, "info")
             command = `cd ${repoPath} && docker compose start ${serviceName}`
-            break;
+            break
           case "stop":
             this.dashboard.log(`Stopping Docker service ${serviceName} in ${repo}...`, "info")
             command = `cd ${repoPath} && docker compose stop ${serviceName}`
-            break;
+            break
           case "restart":
             this.dashboard.log(`Restarting Docker service ${serviceName} in ${repo}...`, "info")
             command = `cd ${repoPath} && docker compose restart ${serviceName}`
-            break;
+            break
           case "recreate":
             this.dashboard.log(`Recreating Docker service ${serviceName} in ${repo}...`, "info")
             command = `cd ${repoPath} && docker compose up -d --force-recreate ${serviceName}`
-            break;
-          case "logs":
-            this.dashboard.log(`Showing logs for Docker service ${serviceName} in ${repo}...`, "info")
+            break
+          case "logs": {
+            this.dashboard.log(
+              `Showing logs for Docker service ${serviceName} in ${repo}...`,
+              "info",
+            )
             // For logs, we might want to show them in a box or open a new terminal
             command = `cd ${repoPath} && docker compose logs --tail=50 ${serviceName}`
             const { stdout } = await execAsync(command)
             this.dashboard.log(stdout, "info")
-            return; // Don't refresh for logs
+            return // Don't refresh for logs
+          }
           case "shell":
-            this.dashboard.log(`Opening shell for Docker service ${serviceName} in ${repo}...`, "info")
+            this.dashboard.log(
+              `Opening shell for Docker service ${serviceName} in ${repo}...`,
+              "info",
+            )
             // This is tricky - might need to spawn a new terminal or pause blessed
             command = `cd ${repoPath} && docker compose exec ${serviceName} sh`
             this.dashboard.log(`Run manually: ${command}`, "info")
-            return; // Can't easily do interactive shell
+            return // Can't easily do interactive shell
+          case "up":
+            this.dashboard.log(`Starting all services in ${repo}...`, "info")
+            command = `cd ${repoPath} && docker compose up -d`
+            break
+          case "start-all":
+            this.dashboard.log(`Starting all services in ${repo}...`, "info")
+            command = `cd ${repoPath} && docker compose start`
+            break
+          case "stop-all":
+            this.dashboard.log(`Stopping all services in ${repo}...`, "info")
+            command = `cd ${repoPath} && docker compose stop`
+            break
+          case "down":
+            this.dashboard.log(`Taking down all services in ${repo}...`, "info")
+            command = `cd ${repoPath} && docker compose down`
+            break
+          case "logs-all": {
+            this.dashboard.log(`Showing logs for all services in ${repo}...`, "info")
+            command = `cd ${repoPath} && docker compose logs --tail=50`
+            const { stdout } = await execAsync(command)
+            this.dashboard.log(stdout, "info")
+            return // Don't refresh for logs
+          }
           default:
             this.dashboard.log(`Unknown Docker action: ${action}`, "error")
             return
         }
-        
+
         await execAsync(command)
-        this.dashboard.log(`Successfully completed ${action} on ${serviceName}`, "info")
-        
+        const target = dockerService.isProject ? `project ${repo}` : `service ${serviceName}`
+        this.dashboard.log(`Successfully completed ${action} on ${target}`, "info")
+
         // Force refresh to update the status
         await this.performRefresh(true)
       } catch (error) {
         this.dashboard.log(`Failed to ${action} Docker service: ${error}`, "error")
+      }
+    })
+
+    // Handle PR merge
+    this.dashboard.onPRMerge(async (pr: PullRequest, method: string) => {
+      try {
+        const repoName = `${pr.repository.owner}/${pr.repository.name}`
+        this.dashboard.log(`Merging PR #${pr.number} using ${method} method...`, "info")
+
+        const command = `gh pr merge ${pr.number} -R ${repoName} --${method}`
+        await execAsync(command)
+
+        this.dashboard.log(`Successfully merged PR #${pr.number}`, "info")
+        await this.performRefresh(true)
+      } catch (error) {
+        this.dashboard.log(`Failed to merge PR: ${error}`, "error")
+      }
+    })
+
+    // Handle PR checkout
+    this.dashboard.onPRCheckout(async (pr: PullRequest) => {
+      try {
+        const repoName = `${pr.repository.owner}/${pr.repository.name}`
+        this.dashboard.log(`Checking out PR #${pr.number} branch ${pr.headRefName}...`, "info")
+
+        const command = `gh pr checkout ${pr.number} -R ${repoName}`
+        await execAsync(command)
+
+        this.dashboard.log(`Successfully checked out PR #${pr.number}`, "info")
+      } catch (error) {
+        this.dashboard.log(`Failed to checkout PR: ${error}`, "error")
+      }
+    })
+
+    // Handle PR actions (draft/ready)
+    this.dashboard.onPRAction(async (action: string, pr: PullRequest) => {
+      try {
+        const repoName = `${pr.repository.owner}/${pr.repository.name}`
+
+        if (action === "ready") {
+          this.dashboard.log(`Marking PR #${pr.number} as ready for review...`, "info")
+          const command = `gh pr ready ${pr.number} -R ${repoName}`
+          await execAsync(command)
+          this.dashboard.log(`Successfully marked PR #${pr.number} as ready`, "info")
+        } else if (action === "draft") {
+          this.dashboard.log(`Converting PR #${pr.number} to draft...`, "info")
+          const command = `gh pr edit ${pr.number} -R ${repoName} --draft`
+          await execAsync(command)
+          this.dashboard.log(`Successfully converted PR #${pr.number} to draft`, "info")
+        }
+
+        await this.performRefresh(true)
+      } catch (error) {
+        this.dashboard.log(`Failed to ${action} PR: ${error}`, "error")
+      }
+    })
+
+    // Handle workflow rerun
+    this.dashboard.onWorkflowRerun(async (workflow: WorkflowRun) => {
+      try {
+        const repoName = `${workflow.repository.owner}/${workflow.repository.name}`
+        this.dashboard.log(`Re-running workflow ${workflow.id} in ${repoName}...`, "info")
+
+        const command = `gh run rerun ${workflow.id} -R ${repoName}`
+        await execAsync(command)
+
+        this.dashboard.log(`Successfully triggered rerun of workflow ${workflow.id}`, "info")
+        await this.performRefresh(true)
+      } catch (error) {
+        this.dashboard.log(`Failed to rerun workflow: ${error}`, "error")
+      }
+    })
+
+    // Handle workflow logs
+    this.dashboard.onWorkflowLogs(async (workflow: WorkflowRun) => {
+      try {
+        const repoName = `${workflow.repository.owner}/${workflow.repository.name}`
+        this.dashboard.log(`Fetching logs for workflow ${workflow.id}...`, "info")
+
+        const command = `gh run view ${workflow.id} -R ${repoName} --log`
+        const { stdout } = await execAsync(command)
+
+        // Show first 20 lines of logs in the dashboard
+        const logLines = stdout.split("\n").slice(0, 20)
+        logLines.forEach((line) => this.dashboard.log(line, "info"))
+
+        if (stdout.split("\n").length > 20) {
+          this.dashboard.log(
+            `... (truncated, run 'gh run view ${workflow.id} -R ${repoName} --log' for full logs)`,
+            "info",
+          )
+        }
+      } catch (error) {
+        this.dashboard.log(`Failed to fetch workflow logs: ${error}`, "error")
       }
     })
   }
@@ -245,10 +376,14 @@ export class App {
       if (this.showDocker) {
         this.dockerServices = await this.dockerService.getAllDockerStatus(
           this.repositories,
-          (msg) => this.dashboard.log(msg, "debug")
+          (msg) => this.dashboard.log(msg, "debug"),
         )
         const totalServices = this.dockerServices.reduce((acc, ds) => acc + ds.services.length, 0)
-        this.dashboard.log(`Found ${this.dockerServices.length} compose files, ${totalServices} total services`, "info")
+        const logLevel = this.dockerServices.length > 0 ? "info" : "debug"
+        this.dashboard.log(
+          `Found ${this.dockerServices.length} compose files, ${totalServices} total services`,
+          logLevel,
+        )
       }
 
       // Update watched and completed trackers
@@ -259,6 +394,12 @@ export class App {
           // Transitioned to completed while being watched
           this.completedWorkflows.set(run.id, run)
         }
+      }
+
+      // Track the oldest workflow timestamp for resurrect feature
+      if (allRuns.length > 0) {
+        const oldestRun = allRuns[allRuns.length - 1]
+        this.oldestWorkflowTimestamp = oldestRun.createdAt
       }
 
       // Visible workflows = active runs + completed pending confirmation, excluding dismissed
@@ -339,7 +480,74 @@ export class App {
     })
 
     // Update dashboard with filtered workflows immediately
-    this.dashboard.updateWorkflows(filteredWorkflows, this.jobs, this.pullRequests, this.dockerServices)
+    this.dashboard.updateWorkflows(
+      filteredWorkflows,
+      this.jobs,
+      this.pullRequests,
+      this.dockerServices,
+    )
+  }
+
+  async resurrectOldestWorkflow(): Promise<void> {
+    this.dashboard.log(
+      `Resurrect called - timestamp: ${this.oldestWorkflowTimestamp}, repos: ${this.repositories.length}`,
+      "info",
+    )
+
+    if (!this.oldestWorkflowTimestamp || this.repositories.length === 0) {
+      this.dashboard.log("No older workflows available to resurrect", "info")
+      return
+    }
+
+    try {
+      this.dashboard.log(
+        `Fetching older workflow before ${this.oldestWorkflowTimestamp}...`,
+        "info",
+      )
+
+      // Fetch one workflow older than our oldest timestamp
+      const olderWorkflows = await this.githubService.getOlderWorkflows(
+        this.repositories,
+        this.oldestWorkflowTimestamp,
+        1,
+      )
+
+      if (olderWorkflows.length === 0) {
+        this.dashboard.log("No older workflows found", "info")
+        return
+      }
+
+      // Get current workflows
+      const currentWorkflows = this.dashboard.getCurrentWorkflows()
+
+      // Add the older workflow as completed (so it shows up but is visually distinct)
+      const resurrectedWorkflow = olderWorkflows[0]
+      this.completedWorkflows.set(resurrectedWorkflow.id, resurrectedWorkflow)
+
+      // Update oldest timestamp for next resurrect
+      this.oldestWorkflowTimestamp = resurrectedWorkflow.createdAt
+
+      // Combine current and resurrected workflows
+      const allWorkflows = [...currentWorkflows, resurrectedWorkflow]
+
+      // Update the dashboard
+      this.dashboard.updateWorkflows(
+        allWorkflows,
+        this.jobs,
+        this.pullRequests,
+        this.dockerServices,
+      )
+
+      this.dashboard.log(
+        `Resurrected workflow: ${resurrectedWorkflow.name || resurrectedWorkflow.workflowName}`,
+        "info",
+      )
+    } catch (error) {
+      this.dashboard.log(
+        `Failed to resurrect workflow: ${error instanceof Error ? error.message : "Unknown error"}`,
+        "info",
+      )
+    }
   }
 
   stop(): void {
