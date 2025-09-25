@@ -276,6 +276,22 @@ export class Dashboard {
     this.screen.key(["up"], () => {
       this.queueKeyEvent(() => {
         if (this.selectionMode === "workflows") {
+          // If no workflows, try to move up to PRs or Docker
+          if (this.workflows.length === 0) {
+            if (this.showPRs && this.pullRequests.length > 0) {
+              this.selectionMode = "prs"
+              this.selectedPRIndex = 0
+              this.updatePRHighlight()
+              this.highlightSelected()
+            } else if (this.showDocker && this.flatDockerServices.length > 0) {
+              this.selectionMode = "docker"
+              this.selectedDockerIndex = 0
+              this.updateDockerHighlight()
+              this.highlightSelected()
+            }
+            return
+          }
+
           // If on top row of workflows, move to PRs or Docker
           const currentCoords = this.indexToCoords(this.selectedIndex)
           if (currentCoords.row === 0) {
@@ -320,21 +336,25 @@ export class Dashboard {
             this.selectionMode = "prs"
             this.updateDockerHighlight()
             this.updatePRHighlight()
-          } else {
+          } else if (this.workflows.length > 0) {
             this.selectionMode = "workflows"
             this.selectedIndex = 0
             this.updateDockerHighlight()
             this.highlightSelected()
           }
+          // If no workflows available, stay in docker mode
         } else if (this.selectionMode === "prs") {
-          // Moving down from PRs goes to workflows
-          this.selectionMode = "workflows"
-          // Try to position in the same column if possible
-          const targetCol = Math.min(this.selectedPRIndex, this.cols - 1)
-          const targetIndex = Math.min(targetCol, this.workflows.length - 1)
-          this.selectedIndex = targetIndex
-          this.updatePRHighlight()
-          this.highlightSelected()
+          // Moving down from PRs goes to workflows (only if workflows exist)
+          if (this.workflows.length > 0) {
+            this.selectionMode = "workflows"
+            // Try to position in the same column if possible
+            const targetCol = Math.min(this.selectedPRIndex, this.cols - 1)
+            const targetIndex = Math.min(targetCol, this.workflows.length - 1)
+            this.selectedIndex = targetIndex
+            this.updatePRHighlight()
+            this.highlightSelected()
+          }
+          // If no workflows available, stay in PR mode
         } else if (this.selectionMode === "workflows") {
           this.navigateGrid("down")
         }
@@ -1256,6 +1276,9 @@ Press '?', '/', or 'Esc' to close...`,
         this.layoutWorkflows()
       }
 
+      // Set appropriate initial selection mode based on what's available
+      this.setInitialSelectionMode()
+
       // Always update content
       this.renderWorkflows(workflows, jobs)
     } finally {
@@ -1269,6 +1292,27 @@ Press '?', '/', or 'Esc' to close...`,
 
   getCurrentWorkflows(): WorkflowRun[] {
     return this.workflows
+  }
+
+  private setInitialSelectionMode(): void {
+    // Don't change mode if we're already in a valid state
+    if (this.selectionMode === "workflows" && this.workflows.length > 0) return
+    if (this.selectionMode === "prs" && this.showPRs && this.pullRequests.length > 0) return
+    if (this.selectionMode === "docker" && this.showDocker && this.flatDockerServices.length > 0) return
+
+    // Priority order: Docker > PRs > Workflows
+    // This way we start with the most "static" content at the top
+    if (this.showDocker && this.flatDockerServices.length > 0) {
+      this.selectionMode = "docker"
+      this.selectedDockerIndex = 0
+    } else if (this.showPRs && this.pullRequests.length > 0) {
+      this.selectionMode = "prs"
+      this.selectedPRIndex = 0
+    } else if (this.workflows.length > 0) {
+      this.selectionMode = "workflows"
+      this.selectedIndex = 0
+    }
+    // If nothing is available, stay in workflows mode but selectedIndex will be -1
   }
 
   isModalOpen(): boolean {
