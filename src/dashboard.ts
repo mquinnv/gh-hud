@@ -274,8 +274,8 @@ export class Dashboard {
       this.screen.emit("manual-refresh");
     });
 
-    // 2D Grid Navigation keys (vim-style) with seamless Docker/PR/workflow navigation
-    this.screen.key(["up", "k", "C-p"], () => {
+    // 2D Grid Navigation keys with seamless Docker/PR/workflow navigation
+    this.screen.key(["up"], () => {
       this.queueKeyEvent(() => {
         if (this.selectionMode === "workflows") {
           // If on top row of workflows, move to PRs or Docker
@@ -314,7 +314,7 @@ export class Dashboard {
       });
     });
 
-    this.screen.key(["down", "j", "C-n"], () => {
+    this.screen.key(["down"], () => {
       this.queueKeyEvent(() => {
         if (this.selectionMode === "docker") {
           // Moving down from Docker goes to PRs or workflows
@@ -343,8 +343,8 @@ export class Dashboard {
       });
     });
 
-    // Left/right navigation (vim-style)
-    this.screen.key(["left", "h"], () => {
+    // Left/right navigation
+    this.screen.key(["left"], () => {
       this.queueKeyEvent(() => {
         if (this.selectionMode === "workflows") {
           this.navigateGrid("left");
@@ -356,7 +356,7 @@ export class Dashboard {
       });
     });
 
-    this.screen.key(["right", "l"], () => {
+    this.screen.key(["right"], () => {
       this.queueKeyEvent(() => {
         if (this.selectionMode === "workflows") {
           this.navigateGrid("right");
