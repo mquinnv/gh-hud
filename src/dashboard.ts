@@ -19,6 +19,7 @@ export class Dashboard {
   private flatDockerServices: Array<{
     service: { name: string; state: string; health?: string }
     repo: string
+    composeFile?: string
     isProject?: boolean // True if this represents the project name, not individual service
   }> = []
   private selectionMode: "workflows" | "prs" | "docker" = "workflows" // Track which area is selected
@@ -312,14 +313,18 @@ export class Dashboard {
             this.navigateGrid("up")
           }
         } else if (this.selectionMode === "prs") {
-          // From PRs, go up to Docker if it exists
-          if (this.showDocker && this.flatDockerServices.length > 0) {
+          // First try to navigate within PRs
+          const oldIndex = this.selectedPRIndex
+          this.navigatePRs("up")
+
+          // If we're still at the same index (reached top of PR list)
+          // then try to move to Docker
+          if (this.selectedPRIndex === oldIndex &&
+              this.selectedPRIndex === 0 &&
+              this.showDocker && this.flatDockerServices.length > 0) {
             this.selectionMode = "docker"
             this.updateDockerHighlight()
             this.updatePRHighlight()
-          } else {
-            // Navigate within PRs
-            this.navigatePRs("left")
           }
         } else if (this.selectionMode === "docker") {
           // Navigate within Docker services
@@ -344,8 +349,15 @@ export class Dashboard {
           }
           // If no workflows available, stay in docker mode
         } else if (this.selectionMode === "prs") {
-          // Moving down from PRs goes to workflows (only if workflows exist)
-          if (this.workflows.length > 0) {
+          // First try to navigate within PRs
+          const oldIndex = this.selectedPRIndex
+          this.navigatePRs("down")
+
+          // If we're still at the same index (reached bottom of PR list)
+          // then try to move to workflows
+          if (this.selectedPRIndex === oldIndex &&
+              this.selectedPRIndex === this.pullRequests.length - 1 &&
+              this.workflows.length > 0) {
             this.selectionMode = "workflows"
             // Try to position in the same column if possible
             const targetCol = Math.min(this.selectedPRIndex, this.cols - 1)
@@ -354,20 +366,29 @@ export class Dashboard {
             this.updatePRHighlight()
             this.highlightSelected()
           }
-          // If no workflows available, stay in PR mode
         } else if (this.selectionMode === "workflows") {
           this.navigateGrid("down")
         }
       })
     })
 
+    // Debug: catch all key events to see what's happening
+    this.screen.on("keypress", (_ch: any, key: any) => {
+      if (key && (key.name === "left" || key.name === "right")) {
+        this.log(`Key event detected: ${key.name}, mode: ${this.selectionMode}, modalOpen: ${this.modalOpen}`, "debug")
+      }
+    })
+
     // Left/right navigation
     this.screen.key(["left"], () => {
+      this.log(`Left key handler triggered, mode: ${this.selectionMode}`, "debug")
       this.queueKeyEvent(() => {
+        this.log(`Left key pressed, mode: ${this.selectionMode}`, "debug")
         if (this.selectionMode === "workflows") {
           this.navigateGrid("left")
         } else if (this.selectionMode === "prs") {
-          this.navigatePRs("left")
+          // PRs are vertical, left/right does nothing
+          this.log(`PRs are vertical, ignoring left key`, "debug")
         } else if (this.selectionMode === "docker") {
           this.navigateDocker("left")
         }
@@ -375,11 +396,14 @@ export class Dashboard {
     })
 
     this.screen.key(["right"], () => {
+      this.log(`Right key handler triggered, mode: ${this.selectionMode}`, "debug")
       this.queueKeyEvent(() => {
+        this.log(`Right key pressed, mode: ${this.selectionMode}`, "debug")
         if (this.selectionMode === "workflows") {
           this.navigateGrid("right")
         } else if (this.selectionMode === "prs") {
-          this.navigatePRs("right")
+          // PRs are vertical, left/right does nothing
+          this.log(`PRs are vertical, ignoring right key`, "debug")
         } else if (this.selectionMode === "docker") {
           this.navigateDocker("right")
         }
@@ -650,7 +674,7 @@ export class Dashboard {
     return index >= 0 && index < this.workflows.length
   }
 
-  // Navigate PRs
+  // Navigate PRs - handle vertical navigation since PRs are displayed as a vertical list
   private navigatePRs(direction: "up" | "down" | "left" | "right"): void {
     if (this.pullRequests.length === 0) return
 
@@ -658,23 +682,28 @@ export class Dashboard {
     let newIndex = currentIndex
 
     switch (direction) {
-      case "left":
       case "up":
         newIndex = currentIndex - 1
         if (newIndex < 0) {
-          newIndex = this.pullRequests.length - 1 // Wrap to end
+          // At top of PR list, let the up handler switch to Docker section
+          return
         }
         break
-      case "right":
       case "down":
         newIndex = currentIndex + 1
         if (newIndex >= this.pullRequests.length) {
-          newIndex = 0 // Wrap to beginning
+          // At bottom of PR list, could switch to workflows if they exist
+          return
         }
         break
+      case "left":
+      case "right":
+        // Left/right do nothing in vertical PR list
+        return
     }
 
     if (newIndex !== currentIndex) {
+      this.log(`PR navigation: ${currentIndex} -> ${newIndex} (of ${this.pullRequests.length})`, "debug")
       this.selectedPRIndex = newIndex
       this.updatePRHighlight()
     }
@@ -1298,7 +1327,8 @@ Press '?', '/', or 'Esc' to close...`,
     // Don't change mode if we're already in a valid state
     if (this.selectionMode === "workflows" && this.workflows.length > 0) return
     if (this.selectionMode === "prs" && this.showPRs && this.pullRequests.length > 0) return
-    if (this.selectionMode === "docker" && this.showDocker && this.flatDockerServices.length > 0) return
+    if (this.selectionMode === "docker" && this.showDocker && this.flatDockerServices.length > 0)
+      return
 
     // Priority order: Docker > PRs > Workflows
     // This way we start with the most "static" content at the top
@@ -1933,7 +1963,12 @@ Press '?', '/', or 'Esc' to close...`,
   onDockerAction(
     callback: (
       action: string,
-      service: { service: { name: string; state: string; health?: string }; repo: string },
+      service: {
+        service: { name: string; state: string; health?: string }
+        repo: string
+        composeFile?: string
+        isProject?: boolean
+      },
     ) => void,
   ): void {
     ;(this.screen as any).on("docker-action", callback)
@@ -2183,6 +2218,8 @@ Press '?', '/', or 'Esc' to close...`,
       width: "100%",
       height: 5,
       tags: true,
+      focusable: false,  // Don't capture focus
+      keyable: false,    // Don't capture keyboard events
       border: {
         type: "line",
       },
@@ -2217,6 +2254,8 @@ Press '?', '/', or 'Esc' to close...`,
       width: "100%",
       height: 5,
       tags: true,
+      focusable: false,  // Don't capture focus
+      keyable: false,    // Don't capture keyboard events
       border: {
         type: "line",
       },
@@ -2255,6 +2294,7 @@ Press '?', '/', or 'Esc' to close...`,
       icon: string
       color: string
       repo: string
+      composeFile: string
       state: string
       health?: string
     }> = []
@@ -2330,6 +2370,7 @@ Press '?', '/', or 'Esc' to close...`,
           icon,
           color,
           repo: repoName,
+          composeFile: status.composeFile,
           state: service.state,
           health: service.health,
         })
@@ -2342,10 +2383,12 @@ Press '?', '/', or 'Esc' to close...`,
 
     // Group by project (repo name without owner) for better organization
     const servicesByRepo = new Map<string, typeof services>()
+    const composeFileByRepo = new Map<string, string>()
     for (const service of services) {
       const projectName = service.repo // Already just the project name from earlier
       if (!servicesByRepo.has(projectName)) {
         servicesByRepo.set(projectName, [])
+        composeFileByRepo.set(projectName, service.composeFile)
       }
       servicesByRepo.get(projectName)?.push(service)
     }
@@ -2363,6 +2406,7 @@ Press '?', '/', or 'Esc' to close...`,
       this.flatDockerServices.push({
         service: { name: project, state: "project", health: undefined },
         repo: project,
+        composeFile: composeFileByRepo.get(project),
         isProject: true,
       })
       serviceIndex++
@@ -2381,6 +2425,7 @@ Press '?', '/', or 'Esc' to close...`,
               health: s.health,
             },
             repo: s.repo,
+            composeFile: s.composeFile,
             isProject: false,
           })
 
@@ -2441,6 +2486,9 @@ Press '?', '/', or 'Esc' to close...`,
     for (const [repo, repoPrs] of prsByRepo) {
       for (const pr of repoPrs) {
         const isSelected = this.selectionMode === "prs" && currentIndex === this.selectedPRIndex
+        if (isSelected) {
+          this.log(`PR ${currentIndex} is selected (selectedPRIndex=${this.selectedPRIndex})`, "trace")
+        }
         let statusIcon = ""
         let statusColor = "white"
 

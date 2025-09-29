@@ -17,7 +17,8 @@ export class DockerServiceManager {
     // - https://github.com/owner/repo.git
     // - git@github.com:owner/repo.git
     // - gh:owner/repo
-    const normalized = remoteUrl.toLowerCase().replace(/\.git$/, "")
+    // - https://github.com/owner/repo
+    const normalized = remoteUrl.toLowerCase().replace(/\.git$/, "").trim()
     const repoLower = repo.toLowerCase()
 
     // Check if the remote contains the owner/repo pattern
@@ -28,6 +29,13 @@ export class DockerServiceManager {
     // Also check if it contains owner:repo pattern (SSH format)
     const sshFormat = repoLower.replace("/", ":")
     if (normalized.includes(sshFormat)) {
+      return true
+    }
+
+    // Extract repo name from URL and compare
+    // Handle both HTTPS and SSH formats
+    const urlMatch = normalized.match(/(?:github\.com[:/])([^/]+\/[^/\.]+)/)
+    if (urlMatch && urlMatch[1] === repoLower) {
       return true
     }
 
@@ -78,8 +86,10 @@ export class DockerServiceManager {
   /**
    * Get all possible repository paths from repo name (owner/repo format)
    */
-  private async getRepoPaths(repo: string): Promise<string[]> {
+  private async getRepoPaths(repo: string, debug?: (msg: string) => void): Promise<string[]> {
     const paths: string[] = []
+    if (debug) debug(`Looking for repository: ${repo}`)
+
     try {
       // Try to get the current working directory's git remote
       const { stdout: currentRemote } = await execa("git", ["remote", "get-url", "origin"], {
@@ -93,54 +103,106 @@ export class DockerServiceManager {
           timeout: 2000,
         })
         paths.push(gitRoot)
+        if (debug) debug(`Found in current directory: ${gitRoot}`)
       }
 
       // Try common project directories
       const homeDir = process.env.HOME || process.env.USERPROFILE || ""
-      const repoName = repo.split("/")[1]
-      const possiblePaths = [
-        join(homeDir, "Projects", repoName),
-        join(homeDir, "projects", repoName),
-        join(homeDir, "code", repoName),
-        join(homeDir, "Code", repoName),
-        join(homeDir, "src", repoName),
-        join(homeDir, "workspace", repoName),
-        join(process.cwd(), "..", repoName),
-        // Also try some common alternative folder names
-        join(homeDir, "Projects", "phenix"), // Special case for phenixcrm/clean -> phenix
-        join(homeDir, "Projects", "phenixcrm"),
+      const [owner, repoName] = repo.split("/")
+
+      // Build a more comprehensive list of possible paths
+      const projectDirs = [
+        join(homeDir, "Projects"),
+        join(homeDir, "projects"),
+        join(homeDir, "code"),
+        join(homeDir, "Code"),
+        join(homeDir, "src"),
+        join(homeDir, "workspace"),
+        join(process.cwd(), ".."),
       ]
 
-      for (const path of possiblePaths) {
-        if (existsSync(path)) {
-          // Check if it has a docker-compose file first (faster check)
-          const hasCompose = this.findComposeFiles(path).length > 0
+      // For each project directory, scan for directories with docker-compose files
+      for (const projectDir of projectDirs) {
+        if (!existsSync(projectDir)) continue
+
+        // Check for exact repo name match
+        const exactPath = join(projectDir, repoName)
+        if (existsSync(exactPath)) {
+          const hasCompose = this.findComposeFiles(exactPath).length > 0
           if (hasCompose) {
             // Verify it's the right repo by checking git remote
             try {
               const { stdout } = await execa("git", ["remote", "get-url", "origin"], {
-                cwd: path,
+                cwd: exactPath,
                 timeout: 2000,
                 reject: false,
               })
               if (stdout && this.remoteMatchesRepo(stdout, repo)) {
-                paths.push(path)
+                paths.push(exactPath)
+                if (debug) debug(`Found at: ${exactPath}`)
               }
             } catch {
-              // Not a git repo, but if it has docker-compose, might still be valid
-              // Check if the path ends with expected repo name
-              if (path.endsWith(repoName)) {
-                paths.push(path)
-              }
+              // Not a git repo, but might still be valid
+              if (debug) debug(`Found docker-compose but no git repo at: ${exactPath}`)
             }
           }
         }
+
+        // Also scan all subdirectories for repositories that match
+        try {
+          const { stdout: dirs } = await execa("ls", ["-1", projectDir], {
+            timeout: 2000,
+          })
+
+          const dirList = dirs.split("\n").filter(d => d.trim())
+          for (const dir of dirList) {
+            const fullPath = join(projectDir, dir)
+
+            // Skip if not a directory
+            if (!existsSync(fullPath)) continue
+
+            // Check if it has docker-compose files
+            const hasCompose = this.findComposeFiles(fullPath).length > 0
+            if (!hasCompose) continue
+
+            // Check git remote
+            try {
+              const { stdout } = await execa("git", ["remote", "get-url", "origin"], {
+                cwd: fullPath,
+                timeout: 2000,
+                reject: false,
+              })
+
+              if (stdout && this.remoteMatchesRepo(stdout, repo)) {
+                paths.push(fullPath)
+                if (debug) debug(`Found matching repo at: ${fullPath}`)
+              }
+            } catch {
+              // Not a git repo or error getting remote
+              // If the directory name is related to the repo name, might still include it
+              const dirLower = dir.toLowerCase()
+              const repoLower = repoName.toLowerCase()
+              const ownerLower = owner.toLowerCase()
+
+              if (dirLower.includes(repoLower) || dirLower.includes(ownerLower)) {
+                if (debug) debug(`Found possible match (no git) at: ${fullPath}`)
+                // We'll include it but with lower priority
+              }
+            }
+          }
+        } catch {
+          // Error scanning directory
+        }
       }
-    } catch {
-      // Ignore errors
+    } catch (error) {
+      if (debug) debug(`Error in getRepoPaths: ${error}`)
     }
 
-    return [...new Set(paths)] // Remove duplicates
+    const uniquePaths = [...new Set(paths)]
+    if (debug && uniquePaths.length === 0) {
+      debug(`No local paths found for repository: ${repo}`)
+    }
+    return uniquePaths
   }
 
   /**
@@ -326,10 +388,11 @@ export class DockerServiceManager {
     }
 
     const allStatuses: DockerServiceStatus[] = []
+    const processedComposeFiles = new Set<string>() // Track processed compose files to avoid duplicates
 
     for (const repo of repos) {
       if (debug) debug(`Checking Docker services for ${repo}...`)
-      const repoPaths = await this.getRepoPaths(repo)
+      const repoPaths = await this.getRepoPaths(repo, debug)
 
       if (repoPaths.length === 0) {
         if (debug) debug(`Could not find local path for ${repo}`)
@@ -337,8 +400,16 @@ export class DockerServiceManager {
         continue
       }
 
-      // Try each possible path and use the one with running services
+      // Track if we've found services for this repo
+      let foundServicesForRepo = false
+
+      // Try each possible path but stop once we find services
       for (const repoPath of repoPaths) {
+        if (foundServicesForRepo) {
+          if (debug) debug(`Already found services for ${repo}, skipping ${repoPath}`)
+          break
+        }
+
         if (debug) debug(`Checking repo path: ${repoPath}`)
         const composeFiles = this.findComposeFiles(repoPath)
 
@@ -351,6 +422,12 @@ export class DockerServiceManager {
         const workingDirName = repoPath.split("/").pop() || repo
 
         for (const composeFile of composeFiles) {
+          // Skip if we've already processed this exact compose file
+          if (processedComposeFiles.has(composeFile)) {
+            if (debug) debug(`Already processed ${composeFile}, skipping`)
+            continue
+          }
+
           if (debug) debug(`Getting status for ${composeFile}`)
           const status = await this.getComposeStatus(composeFile, repo, workingDirName)
           if (status.error) {
@@ -362,6 +439,12 @@ export class DockerServiceManager {
           // Only add if we found services or got an error (not just empty)
           if (status.services.length > 0 || status.error) {
             allStatuses.push(status)
+            processedComposeFiles.add(composeFile)
+
+            // Mark that we found services for this repo
+            if (status.services.length > 0) {
+              foundServicesForRepo = true
+            }
           }
         }
       }
