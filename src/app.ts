@@ -359,7 +359,9 @@ export class App {
 
         // Show first 20 lines of logs in the dashboard
         const logLines = stdout.split("\n").slice(0, 20)
-        logLines.forEach((line) => this.dashboard.log(line, "info"))
+        logLines.forEach((line) => {
+          this.dashboard.log(line, "info")
+        })
 
         if (stdout.split("\n").length > 20) {
           this.dashboard.log(
@@ -411,11 +413,8 @@ export class App {
 
         // Log which repos have Docker services
         if (this.dockerServices.length > 0) {
-          const reposWithDocker = [...new Set(this.dockerServices.map(ds => ds.repository))]
-          this.dashboard.log(
-            `Docker services found in: ${reposWithDocker.join(", ")}`,
-            "debug",
-          )
+          const reposWithDocker = [...new Set(this.dockerServices.map((ds) => ds.repository))]
+          this.dashboard.log(`Docker services found in: ${reposWithDocker.join(", ")}`, "debug")
         }
       }
 

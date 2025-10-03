@@ -18,7 +18,10 @@ export class DockerServiceManager {
     // - git@github.com:owner/repo.git
     // - gh:owner/repo
     // - https://github.com/owner/repo
-    const normalized = remoteUrl.toLowerCase().replace(/\.git$/, "").trim()
+    const normalized = remoteUrl
+      .toLowerCase()
+      .replace(/\.git$/, "")
+      .trim()
     const repoLower = repo.toLowerCase()
 
     // Check if the remote contains the owner/repo pattern
@@ -34,7 +37,7 @@ export class DockerServiceManager {
 
     // Extract repo name from URL and compare
     // Handle both HTTPS and SSH formats
-    const urlMatch = normalized.match(/(?:github\.com[:/])([^/]+\/[^/\.]+)/)
+    const urlMatch = normalized.match(/(?:github\.com[:/])([^/]+\/[^/.]+)/)
     if (urlMatch && urlMatch[1] === repoLower) {
       return true
     }
@@ -154,7 +157,7 @@ export class DockerServiceManager {
             timeout: 2000,
           })
 
-          const dirList = dirs.split("\n").filter(d => d.trim())
+          const dirList = dirs.split("\n").filter((d) => d.trim())
           for (const dir of dirList) {
             const fullPath = join(projectDir, dir)
 
@@ -332,14 +335,14 @@ export class DockerServiceManager {
       // Try docker compose v2 first, then fall back to docker-compose v1
       let output: string
       try {
-        const result = await execa("docker", ["compose", "-f", composeFile, "ps"], {
+        const result = await execa("docker", ["compose", "-f", composeFile, "ps", "-a"], {
           cwd: dir,
           timeout: 5000,
         })
         output = result.stdout
       } catch {
         // Fallback to docker-compose v1
-        const result = await execa("docker-compose", ["-f", composeFile, "ps"], {
+        const result = await execa("docker-compose", ["-f", composeFile, "ps", "-a"], {
           cwd: dir,
           timeout: 5000,
         })

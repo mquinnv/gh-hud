@@ -57,6 +57,8 @@ export class Dashboard {
   private lastStatusLine1 = "" // Cache last status line to avoid re-rendering
   private lastStatusLine2 = "" // Cache last status line to avoid re-rendering
   private expandedJobs: Set<string> = new Set() // Track which job IDs are expanded (default is collapsed)
+  private zoomedMode = false // Track if a workflow is zoomed to full screen
+  private zoomedWorkflowIndex = 0 // Track which workflow is zoomed
 
   constructor() {
     // Load saved preferences
@@ -165,8 +167,13 @@ export class Dashboard {
     this.screen.on("keypress", (_ch, key) => {
       if (!key) return
 
-      // Ignore ESC key presses
+      // ESC key handling - exit zoom mode if zoomed, otherwise ignore
       if (key.name === "escape") {
+        if (this.zoomedMode) {
+          this.queueKeyEvent(() => {
+            this.toggleZoomMode()
+          })
+        }
         return // Prevent any default handling
       }
 
@@ -211,7 +218,13 @@ export class Dashboard {
       this.screen.program.hideCursor()
 
       // Remove Setulc capability entirely from terminfo
-      const program = this.screen.program as any
+      const program = this.screen.program as {
+        terminfo?: Record<string, unknown>
+        terminal?: Record<string, unknown>
+        tput?: Record<string, unknown>
+        _write?: (text: string) => boolean | undefined
+        write?: (text: string) => boolean | undefined
+      }
       if (program.terminfo) {
         delete program.terminfo.Setulc
         delete program.terminfo.setulc
@@ -319,9 +332,12 @@ export class Dashboard {
 
           // If we're still at the same index (reached top of PR list)
           // then try to move to Docker
-          if (this.selectedPRIndex === oldIndex &&
-              this.selectedPRIndex === 0 &&
-              this.showDocker && this.flatDockerServices.length > 0) {
+          if (
+            this.selectedPRIndex === oldIndex &&
+            this.selectedPRIndex === 0 &&
+            this.showDocker &&
+            this.flatDockerServices.length > 0
+          ) {
             this.selectionMode = "docker"
             this.updateDockerHighlight()
             this.updatePRHighlight()
@@ -355,9 +371,11 @@ export class Dashboard {
 
           // If we're still at the same index (reached bottom of PR list)
           // then try to move to workflows
-          if (this.selectedPRIndex === oldIndex &&
-              this.selectedPRIndex === this.pullRequests.length - 1 &&
-              this.workflows.length > 0) {
+          if (
+            this.selectedPRIndex === oldIndex &&
+            this.selectedPRIndex === this.pullRequests.length - 1 &&
+            this.workflows.length > 0
+          ) {
             this.selectionMode = "workflows"
             // Try to position in the same column if possible
             const targetCol = Math.min(this.selectedPRIndex, this.cols - 1)
@@ -373,9 +391,12 @@ export class Dashboard {
     })
 
     // Debug: catch all key events to see what's happening
-    this.screen.on("keypress", (_ch: any, key: any) => {
+    this.screen.on("keypress", (_ch: string | undefined, key: { name?: string }) => {
       if (key && (key.name === "left" || key.name === "right")) {
-        this.log(`Key event detected: ${key.name}, mode: ${this.selectionMode}, modalOpen: ${this.modalOpen}`, "debug")
+        this.log(
+          `Key event detected: ${key.name}, mode: ${this.selectionMode}, modalOpen: ${this.modalOpen}`,
+          "debug",
+        )
       }
     })
 
@@ -454,7 +475,7 @@ export class Dashboard {
     this.screen.key(["t"], () => {
       if (this.selectionMode === "docker" && this.showDocker) {
         const dockerService = this.flatDockerServices[this.selectedDockerIndex]
-        if (dockerService && dockerService.isProject) {
+        if (dockerService?.isProject) {
           this.screen.emit("docker-action", "stop-all", dockerService)
         }
       }
@@ -464,7 +485,7 @@ export class Dashboard {
     this.screen.key(["d"], () => {
       if (this.selectionMode === "docker" && this.showDocker) {
         const dockerService = this.flatDockerServices[this.selectedDockerIndex]
-        if (dockerService && dockerService.isProject) {
+        if (dockerService?.isProject) {
           this.screen.emit("docker-action", "down", dockerService)
         }
       } else if (this.selectionMode === "workflows") {
@@ -589,6 +610,15 @@ export class Dashboard {
       })
     })
 
+    // Toggle zoom mode for selected workflow
+    this.screen.key(["z"], () => {
+      this.queueKeyEvent(() => {
+        if (this.selectionMode === "workflows" && this.workflows.length > 0) {
+          this.toggleZoomMode()
+        }
+      })
+    })
+
     // Show help - don't use queue, just show directly
     this.screen.key(["?", "/"], () => {
       // Removed debug output
@@ -703,7 +733,10 @@ export class Dashboard {
     }
 
     if (newIndex !== currentIndex) {
-      this.log(`PR navigation: ${currentIndex} -> ${newIndex} (of ${this.pullRequests.length})`, "debug")
+      this.log(
+        `PR navigation: ${currentIndex} -> ${newIndex} (of ${this.pullRequests.length})`,
+        "debug",
+      )
       this.selectedPRIndex = newIndex
       this.updatePRHighlight()
     }
@@ -1123,7 +1156,7 @@ Press '?', '/', or 'Esc' to close...`,
     this.confirmBox.focus()
 
     // Handle confirmation
-    const confirmHandler = (_ch: any, key: any) => {
+    const confirmHandler = (_ch: string | undefined, key: { name?: string }) => {
       if (key && (key.name === "y" || key.name === "Y")) {
         // User confirmed
         this.hideKillConfirmation()
@@ -1184,7 +1217,7 @@ Press '?', '/', or 'Esc' to close...`,
     this.mergeMenuBox.focus()
 
     // Handle merge options
-    const mergeHandler = (_ch: any, key: any) => {
+    const mergeHandler = (_ch: string | undefined, key: { name?: string }) => {
       if (key) {
         if (key.name === "m") {
           this.hideMergeMenu()
@@ -1479,6 +1512,60 @@ Press '?', '/', or 'Esc' to close...`,
         return
       }
 
+      // Handle zoom mode - show single workflow full screen
+      if (this.zoomedMode) {
+        // Use the zoomed workflow index
+        const workflow = this.workflows[this.zoomedWorkflowIndex]
+        if (workflow) {
+          const borderColor = this.getBorderColor(workflow, true)
+
+          const box = blessed.box({
+            parent: this.screen,
+            top: 0, // Use full vertical space (no PR/Docker headers in zoom mode)
+            left: 0,
+            width: "100%",
+            height: (this.screen.height as number) - 4 - debugHeight, // Full height minus status bar and debug
+            tags: true,
+            border: {
+              type: "line",
+            },
+            style: {
+              fg: "white",
+              border: {
+                fg: borderColor,
+              },
+            },
+            scrollable: true,
+            alwaysScroll: true,
+            keys: true,
+            vi: false,
+          })
+
+          newGrid.push(box)
+
+          // Store box width for formatting
+          this.currentBoxWidth = screenWidth
+          this.cols = 1
+          this.rows = 1
+
+          // Now swap grids atomically
+          const oldGrid = this.grid
+          this.grid = newGrid
+
+          // Ensure selection highlighting is applied after creating the box
+          this.highlightSelected()
+
+          // Destroy old boxes after new one is in place
+          oldGrid.forEach((box) => {
+            box.destroy()
+          })
+
+          return
+        }
+        // If workflow not found, fall back to normal grid mode
+        this.zoomedMode = false
+      }
+
       // Calculate grid layout - use full width for single card
       this.cols = count === 1 ? 1 : Math.min(Math.ceil(Math.sqrt(count)), 3)
       this.rows = Math.ceil(count / this.cols)
@@ -1540,7 +1627,30 @@ Press '?', '/', or 'Esc' to close...`,
   }
 
   private renderWorkflows(workflows: WorkflowRun[], jobs: Map<string, WorkflowJob[]>): void {
-    // Batch all content updates before rendering
+    // Handle zoom mode - only render the zoomed workflow
+    if (this.zoomedMode) {
+      const workflow = workflows[this.zoomedWorkflowIndex]
+      if (workflow && this.grid.length > 0) {
+        const box = this.grid[0]
+        const content = this.formatWorkflowContent(
+          workflow,
+          jobs.get(`${workflow.id}`) || [],
+          true, // Always mark as selected in zoom mode
+        )
+
+        // Only update if content actually changed
+        const currentContent = box.getContent()
+        if (currentContent !== content) {
+          box.setContent(content)
+        }
+      }
+
+      this.updateStatusBar()
+      this.scheduleRender()
+      return
+    }
+
+    // Normal mode - render all workflows
     workflows.forEach((workflow, index) => {
       if (index >= this.grid.length) return
 
@@ -1572,8 +1682,8 @@ Press '?', '/', or 'Esc' to close...`,
   ): string {
     const lines: string[] = []
 
-    // Determine if we should show all steps based on number of workflows
-    const showAllSteps = this.workflows.length <= 2
+    // Determine if we should show all steps based on number of workflows or zoom mode
+    const showAllSteps = this.workflows.length <= 2 || this.zoomedMode
 
     // Map of known repo to working directory names (same as PRs)
     const repoToWorkingDir: Record<string, string> = {
@@ -1971,27 +2081,27 @@ Press '?', '/', or 'Esc' to close...`,
       },
     ) => void,
   ): void {
-    ;(this.screen as any).on("docker-action", callback)
+    this.screen.on("docker-action" as never, callback as never)
   }
 
   onPRMerge(callback: (pr: PullRequest, method: string) => void): void {
-    ;(this.screen as any).on("pr-merge", callback)
+    this.screen.on("pr-merge" as never, callback as never)
   }
 
   onPRCheckout(callback: (pr: PullRequest) => void): void {
-    ;(this.screen as any).on("pr-checkout", callback)
+    this.screen.on("pr-checkout" as never, callback as never)
   }
 
   onPRAction(callback: (action: string, pr: PullRequest) => void): void {
-    ;(this.screen as any).on("pr-action", callback)
+    this.screen.on("pr-action" as never, callback as never)
   }
 
   onWorkflowRerun(callback: (workflow: WorkflowRun) => void): void {
-    ;(this.screen as any).on("workflow-rerun", callback)
+    this.screen.on("workflow-rerun" as never, callback as never)
   }
 
   onWorkflowLogs(callback: (workflow: WorkflowRun) => void): void {
-    ;(this.screen as any).on("workflow-logs", callback)
+    this.screen.on("workflow-logs" as never, callback as never)
   }
 
   // Get contextual shortcuts based on current selection
@@ -2044,8 +2154,6 @@ Press '?', '/', or 'Esc' to close...`,
         shortcuts.push("c: checkout", "d: diff")
         return shortcuts
       }
-
-      case "workflows":
       default: {
         const workflow = this.workflows[this.selectedIndex]
         if (!workflow) return baseShortcuts
@@ -2218,8 +2326,8 @@ Press '?', '/', or 'Esc' to close...`,
       width: "100%",
       height: 5,
       tags: true,
-      focusable: false,  // Don't capture focus
-      keyable: false,    // Don't capture keyboard events
+      focusable: false, // Don't capture focus
+      keyable: false, // Don't capture keyboard events
       border: {
         type: "line",
       },
@@ -2254,8 +2362,8 @@ Press '?', '/', or 'Esc' to close...`,
       width: "100%",
       height: 5,
       tags: true,
-      focusable: false,  // Don't capture focus
-      keyable: false,    // Don't capture keyboard events
+      focusable: false, // Don't capture focus
+      keyable: false, // Don't capture keyboard events
       border: {
         type: "line",
       },
@@ -2487,7 +2595,10 @@ Press '?', '/', or 'Esc' to close...`,
       for (const pr of repoPrs) {
         const isSelected = this.selectionMode === "prs" && currentIndex === this.selectedPRIndex
         if (isSelected) {
-          this.log(`PR ${currentIndex} is selected (selectedPRIndex=${this.selectedPRIndex})`, "trace")
+          this.log(
+            `PR ${currentIndex} is selected (selectedPRIndex=${this.selectedPRIndex})`,
+            "trace",
+          )
         }
         let statusIcon = ""
         let statusColor = "white"
@@ -2733,15 +2844,39 @@ Press '?', '/', or 'Esc' to close...`,
 
     if (anyExpanded) {
       // Collapse all completed jobs for this workflow (remove from expanded set)
-      completedJobs.forEach((job) => this.expandedJobs.delete(job.id.toString()))
+      completedJobs.forEach((job) => {
+        this.expandedJobs.delete(job.id.toString())
+      })
       this.log("Collapsed job steps for completed jobs", "info")
     } else {
       // Expand all completed jobs for this workflow (add to expanded set)
-      completedJobs.forEach((job) => this.expandedJobs.add(job.id.toString()))
+      completedJobs.forEach((job) => {
+        this.expandedJobs.add(job.id.toString())
+      })
       this.log("Expanded job steps for completed jobs", "info")
     }
 
     // Re-render the display
+    this.renderWorkflows(this.workflows, this.jobsCache)
+  }
+
+  private toggleZoomMode(): void {
+    const workflow = this.workflows[this.selectedIndex]
+    if (!workflow) return
+
+    this.zoomedMode = !this.zoomedMode
+
+    if (this.zoomedMode) {
+      // Entering zoom mode - save the selected workflow
+      this.zoomedWorkflowIndex = this.selectedIndex
+      this.log(`Zoomed on workflow: ${workflow.name || workflow.workflowName}`, "info")
+    } else {
+      // Exiting zoom mode
+      this.log("Exited zoom mode", "info")
+    }
+
+    // Re-layout to show zoomed or normal view
+    this.layoutWorkflows()
     this.renderWorkflows(this.workflows, this.jobsCache)
   }
 

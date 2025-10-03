@@ -120,19 +120,41 @@ export class GitHubService {
       })
 
       const data = JSON.parse(stdout)
-      const jobs: WorkflowJob[] = (data.jobs || []).map((job: any) => ({
-        id: job.id,
-        runId: job.run_id,
-        name: job.name,
-        status: job.status,
-        conclusion: job.conclusion,
-        startedAt: job.started_at,
-        completedAt: job.completed_at,
-        steps: job.steps,
-        runner_name: job.runner_name,
-        runner_id: job.runner_id,
-        runner_group_name: job.runner_group_name,
-      }))
+      const jobs: WorkflowJob[] = (data.jobs || []).map(
+        (job: {
+          id: number
+          run_id: number
+          workflow_name: string
+          name: string
+          status: string
+          conclusion: string | null
+          started_at: string | null
+          completed_at: string | null
+          runner_name?: string | null
+          runner_id?: number | null
+          runner_group_name?: string | null
+          steps?: Array<{
+            name: string
+            status: string
+            conclusion: string | null
+            number: number
+            started_at: string | null
+            completed_at: string | null
+          }>
+        }) => ({
+          id: job.id,
+          runId: job.run_id,
+          name: job.name,
+          status: job.status,
+          conclusion: job.conclusion,
+          startedAt: job.started_at,
+          completedAt: job.completed_at,
+          steps: job.steps,
+          runnerName: job.runner_name,
+          runnerId: job.runner_id,
+          runnerGroupName: job.runner_group_name,
+        }),
+      )
 
       this.setCache(cacheKey, jobs)
       return jobs
