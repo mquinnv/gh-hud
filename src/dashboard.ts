@@ -64,15 +64,6 @@ export class Dashboard {
     // Load saved preferences
     this.loadPreferences()
 
-    // Disable mouse tracking completely
-    if (process.stdout.isTTY) {
-      // Disable mouse reporting sequences
-      process.stdout.write("\x1b[?1000l") // Disable X10 mouse
-      process.stdout.write("\x1b[?1002l") // Disable button event mouse
-      process.stdout.write("\x1b[?1003l") // Disable any-event mouse
-      process.stdout.write("\x1b[?1006l") // Disable SGR mouse
-    }
-
     // Override TERM environment variable to force a simpler terminal
     const originalTerm = process.env.TERM
     process.env.TERM = "xterm-color" // Use xterm-color which doesn't have Setulc
@@ -84,7 +75,7 @@ export class Dashboard {
       warnings: false,
       keys: true,
       vi: false,
-      mouse: false, // Explicitly disable mouse support
+      mouse: true, // Enable mouse support for scrolling
       input: process.stdin,
       output: process.stdout,
       terminal: "xterm-color", // Force xterm-color to avoid Setulc
@@ -619,6 +610,31 @@ export class Dashboard {
       })
     })
 
+    // Scroll within workflow box
+    this.screen.key(["pageup"], () => {
+      this.queueKeyEvent(() => {
+        if (this.selectionMode === "workflows" && this.grid.length > 0) {
+          const box = this.grid[this.zoomedMode ? 0 : this.selectedIndex]
+          if (box) {
+            box.scroll(-5) // Scroll up 5 lines
+            this.screen.render()
+          }
+        }
+      })
+    })
+
+    this.screen.key(["pagedown"], () => {
+      this.queueKeyEvent(() => {
+        if (this.selectionMode === "workflows" && this.grid.length > 0) {
+          const box = this.grid[this.zoomedMode ? 0 : this.selectedIndex]
+          if (box) {
+            box.scroll(5) // Scroll down 5 lines
+            this.screen.render()
+          }
+        }
+      })
+    })
+
     // Show help - don't use queue, just show directly
     this.screen.key(["?", "/"], () => {
       // Removed debug output
@@ -1004,12 +1020,13 @@ export class Dashboard {
 {center}{bold}GitHub Workflow Monitor - Help{/bold}{/center}
 
 {bold}Navigation:{/bold}
-  Tab     - Switch between PRs and workflows
-  ↑/k     - Move up in current area
-  ↓/j     - Move down in current area
-  ←/h     - Move left in current area
-  →/l     - Move right in current area
-  Enter   - Open selected item in browser
+  Tab        - Switch between PRs and workflows
+  ↑/k        - Move up in current area
+  ↓/j        - Move down in current area
+  ←/h        - Move left in current area
+  →/l        - Move right in current area
+  PgUp/PgDn  - Scroll within workflow box
+  Enter      - Open selected item in browser
 
 {bold}Actions:{/bold}
   r       - Force refresh
@@ -2223,14 +2240,6 @@ Press '?', '/', or 'Esc' to close...`,
     // Save preferences before exit
     this.savePreferences()
 
-    // Disable mouse tracking before exit
-    if (process.stdout.isTTY) {
-      process.stdout.write("\x1b[?1000l")
-      process.stdout.write("\x1b[?1002l")
-      process.stdout.write("\x1b[?1003l")
-      process.stdout.write("\x1b[?1006l")
-    }
-
     // Emit exit event for the app to handle
     this.screen.emit("exit")
     // Clean shutdown
@@ -2294,14 +2303,6 @@ Press '?', '/', or 'Esc' to close...`,
     // Clean up any event listeners
     process.removeAllListeners("SIGINT")
     process.removeAllListeners("SIGTERM")
-
-    // Ensure mouse tracking is disabled on exit
-    if (process.stdout.isTTY) {
-      process.stdout.write("\x1b[?1000l")
-      process.stdout.write("\x1b[?1002l")
-      process.stdout.write("\x1b[?1003l")
-      process.stdout.write("\x1b[?1006l")
-    }
 
     // Destroy the blessed screen
     if (this.screen) {

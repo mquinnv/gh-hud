@@ -150,9 +150,9 @@ export class GitHubService {
           startedAt: job.started_at,
           completedAt: job.completed_at,
           steps: job.steps,
-          runnerName: job.runner_name,
-          runnerId: job.runner_id,
-          runnerGroupName: job.runner_group_name,
+          runner_name: job.runner_name,
+          runner_id: job.runner_id,
+          runner_group_name: job.runner_group_name,
         }),
       )
 
