@@ -28,10 +28,11 @@
     "dev": "bun --watch src/index.ts",
     "start": "bun dist/index.js",
     "lint": "bun biome check --write .",
+    "check": "bun biome check .",
     "format": "bun biome format --write .",
     "test": "bun test",
     "gh-hud": "bun dist/index.js",
-    "prepublishOnly": "bun run build && bun run lint"
+    "prepublishOnly": "bun run build && bun run check && bun test"
   },
   "keywords": [
     "github",
