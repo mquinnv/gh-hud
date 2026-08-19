@@ -457,8 +457,13 @@ export class App {
         this.jobs.set(id, jobs)
       })
 
-      // Update dashboard
-      this.dashboard.updateWorkflows(workflows, this.jobs, this.pullRequests, this.dockerServices)
+      // Update dashboard - only pass PRs/Docker data when those features are enabled
+      this.dashboard.updateWorkflows(
+        workflows,
+        this.jobs,
+        this.showPRs ? this.pullRequests : undefined,
+        this.showDocker ? this.dockerServices : undefined,
+      )
     } catch (error) {
       // Show error in dashboard
       this.dashboard.log(`Error refreshing: ${error}`, "error")
@@ -515,8 +520,8 @@ export class App {
     this.dashboard.updateWorkflows(
       filteredWorkflows,
       this.jobs,
-      this.pullRequests,
-      this.dockerServices,
+      this.showPRs ? this.pullRequests : undefined,
+      this.showDocker ? this.dockerServices : undefined,
     )
   }
 
@@ -566,8 +571,8 @@ export class App {
       this.dashboard.updateWorkflows(
         allWorkflows,
         this.jobs,
-        this.pullRequests,
-        this.dockerServices,
+        this.showPRs ? this.pullRequests : undefined,
+        this.showDocker ? this.dockerServices : undefined,
       )
 
       this.dashboard.log(

@@ -189,6 +189,15 @@ export class Dashboard {
     // Handle resize
     this.screen.on("resize", () => {
       this.layoutWorkflows()
+      this.renderWorkflows(this.workflows, this.jobsCache)
+      if (this.prHeaderBox) {
+        const prContent = this.formatPRHeader(this.pullRequests)
+        this.prHeaderBox.setContent(prContent)
+      }
+      if (this.dockerHeaderBox) {
+        const dockerContent = this.formatDockerHeader(this.dockerServices)
+        this.dockerHeaderBox.setContent(dockerContent)
+      }
     })
 
     // Show initial status (no loading dialog)
@@ -798,7 +807,7 @@ export class Dashboard {
 
     // Update border color based on selection mode
     if (this.prHeaderBox.style?.border) {
-      this.prHeaderBox.style.border.fg = this.selectionMode === "prs" ? "cyan" : "#666666"
+      this.prHeaderBox.style.border.fg = this.selectionMode === "prs" ? "cyan" : "#f0f0f0"
     }
 
     this.scheduleRender()
@@ -1332,22 +1341,32 @@ Press '?', '/', or 'Esc' to close...`,
         lastUpdate: new Date().toLocaleTimeString(),
       })
 
-      // Update PR header if needed (without recreating if possible)
-      if (this.showPRs && this.prHeaderBox) {
+      // Only show PR header when monitoring PRs AND there are PRs to display
+      const hasPRs = this.showPRs && this.pullRequests.length > 0
+      if (hasPRs && this.prHeaderBox) {
         // Just update content without recreating the box
         const prContent = this.formatPRHeader(this.pullRequests)
         this.prHeaderBox.setContent(prContent)
-      } else if (this.showPRs && !this.prHeaderBox) {
+      } else if (hasPRs && !this.prHeaderBox) {
         this.createOrUpdatePRHeader()
+      } else if (!hasPRs && this.prHeaderBox) {
+        // Remove PR header when there are no PRs
+        this.prHeaderBox.destroy()
+        this.prHeaderBox = undefined
       }
 
-      // Update Docker header if needed (without recreating if possible)
-      if (this.showDocker && this.dockerHeaderBox) {
+      // Only show Docker header when monitoring Docker AND there are services to display
+      const hasDocker = this.showDocker && this.dockerServices.length > 0
+      if (hasDocker && this.dockerHeaderBox) {
         // Just update content without recreating the box
         const dockerContent = this.formatDockerHeader(this.dockerServices)
         this.dockerHeaderBox.setContent(dockerContent)
-      } else if (this.showDocker && !this.dockerHeaderBox) {
+      } else if (hasDocker && !this.dockerHeaderBox) {
         this.createOrUpdateDockerHeader()
+      } else if (!hasDocker && this.dockerHeaderBox) {
+        // Remove Docker header when there are no services
+        this.dockerHeaderBox.destroy()
+        this.dockerHeaderBox = undefined
       }
 
       // Only recreate layout if the number of workflows changed or grid doesn't exist
@@ -1485,8 +1504,8 @@ Press '?', '/', or 'Esc' to close...`,
 
       // Calculate available height (account for status bar, debug box, PR header, and Docker header if shown)
       const debugHeight = this.showDebug ? this.debugBoxHeight : 0
-      const prHeaderHeight = this.showPRs ? 5 : 0
-      const dockerHeaderHeight = this.showDocker ? 5 : 0
+      const prHeaderHeight = this.prHeaderBox ? 5 : 0
+      const dockerHeaderHeight = this.dockerHeaderBox ? 5 : 0
       const screenHeight =
         (this.screen.height as number) - 4 - debugHeight - prHeaderHeight - dockerHeaderHeight // Status bar is now 4 high
       const screenWidth = this.screen.width as number
@@ -1784,9 +1803,12 @@ Press '?', '/', or 'Esc' to close...`,
       jobs.forEach((job) => {
         const jobIcon = this.getStatusIcon(job.status, job.conclusion)
         const jobColor = this.getStatusColor(job.status, job.conclusion)
-        const runnerInfo = job.runner_name ? ` {gray-fg}[${job.runner_name}]{/}` : ""
-        lines.push(` {${jobColor}-fg}${jobIcon} ${job.name}{/}${runnerInfo}`)
+        const runnerInfo = job.runner_name ? ` [${job.runner_name}]` : ""
+        lines.push(
+          ` {${jobColor}-fg}${jobIcon} ${job.name}{/${jobColor}-fg}{white-fg}${runnerInfo}{/white-fg}`,
+        )
 
+        let hasSubSteps = false
         if (job.steps && job.steps.length > 0) {
           // Show progress for running jobs
           if (job.status === "in_progress") {
@@ -1794,77 +1816,29 @@ Press '?', '/', or 'Esc' to close...`,
             const totalSteps = job.steps.length
             const currentStepIndex = job.steps.findIndex((s) => s.status === "in_progress")
 
+            hasSubSteps = true
             lines.push(`   Progress: {cyan-fg}${completedSteps}/${totalSteps} steps{/cyan-fg}`)
 
             if (currentStepIndex >= 0) {
-              // Determine how many steps to show based on available space
-              let startIndex: number
-              let endIndex: number
-
-              if (showAllSteps) {
-                // Show all steps when there are few workflows
-                startIndex = 0
-                endIndex = job.steps.length
-              } else {
-                // Show 2-3 recently completed steps before current (existing behavior)
-                startIndex = Math.max(0, currentStepIndex - 2)
-                endIndex = Math.min(job.steps.length, currentStepIndex + 4)
-              }
-
-              for (let i = startIndex; i < endIndex; i++) {
+              // Show current step and remaining steps only (completed steps are noise)
+              for (let i = currentStepIndex; i < job.steps.length; i++) {
                 const step = job.steps[i]
                 const stepNumber = `${i + 1}/${totalSteps}`
 
-                if (step.status === "completed") {
-                  const stepIcon =
-                    step.conclusion === "success"
-                      ? "✓"
-                      : step.conclusion === "failure"
-                        ? "✗"
-                        : step.conclusion === "skipped"
-                          ? "⊜"
-                          : "○"
-                  const stepColor =
-                    step.conclusion === "success"
-                      ? "green"
-                      : step.conclusion === "failure"
-                        ? "red"
-                        : "gray"
-
-                  let duration = ""
-                  if (step.startedAt && step.completedAt) {
-                    const dur = Math.floor(
-                      (new Date(step.completedAt).getTime() - new Date(step.startedAt).getTime()) /
-                        1000,
-                    )
-                    duration = ` (${dur}s)`
-                  }
-
-                  lines.push(
-                    `   {${stepColor}-fg}${stepIcon}{/} {gray-fg}${stepNumber}{/} ${step.name}{gray-fg}${duration}{/}`,
-                  )
-                } else if (step.status === "in_progress") {
+                if (step.status === "in_progress") {
                   // Current running step - highlighted
                   const stepDuration = step.startedAt
                     ? Math.floor((Date.now() - new Date(step.startedAt).getTime()) / 1000)
                     : 0
 
                   lines.push(
-                    `   {yellow-fg}▶ ${stepNumber} {bold}${step.name}{/bold} (${stepDuration}s){/}`,
+                    `   {bold}{yellow-fg}▶ ${stepNumber} ${step.name} (${stepDuration}s){/yellow-fg}{/bold}`,
                   )
                 } else {
                   // Upcoming steps (pending, waiting)
                   const stepIcon = step.status === "waiting" ? "⏳" : "○"
-                  lines.push(`   {gray-fg}${stepIcon} ${stepNumber} ${step.name}{/}`)
+                  lines.push(`   {white-fg}${stepIcon} ${stepNumber} ${step.name}{/white-fg}`)
                 }
-              }
-
-              // Show if there are more steps after what we're displaying (only when not showing all)
-              if (!showAllSteps && endIndex < job.steps.length) {
-                const remainingSteps = job.steps.length - endIndex
-                lines.push(
-                  `   {gray-fg}... and ${remainingSteps} more step${remainingSteps > 1 ? "s" : ""}{/}`,
-                )
               }
             }
           }
@@ -1874,21 +1848,18 @@ Press '?', '/', or 'Esc' to close...`,
             const isExpanded = this.expandedJobs.has(job.id.toString())
 
             if (!isExpanded) {
-              // Show collapsed summary by default (with expand indicator for clarity)
-              if (job.conclusion === "success") {
-                lines.push(
-                  `   {green-fg}✓ All ${job.steps.length} steps completed{/green-fg} {gray-fg}[collapsed]{/}`,
-                )
-              } else if (job.conclusion === "failure") {
+              // Only show detail for failed jobs (which step failed)
+              if (job.conclusion === "failure") {
                 const failedStep = job.steps.find((s) => s.conclusion === "failure")
                 if (failedStep) {
-                  lines.push(
-                    `   {red-fg}✗ Failed at: ${failedStep.name}{/red-fg} {gray-fg}[collapsed]{/}`,
-                  )
+                  hasSubSteps = true
+                  lines.push(`   {red-fg}✗ Failed at: ${failedStep.name}{/red-fg}`)
                 }
               }
-            } else if (showAllSteps && job.steps && job.steps.length > 0) {
-              // Show all completed steps with details when there's room
+              // Successful completed jobs: no sub-steps, the job line itself shows ✓
+            } else {
+              hasSubSteps = true
+              // Expanded: show all steps with details
               job.steps.forEach((step, index) => {
                 const stepNumber = `${index + 1}/${job.steps?.length}`
                 const stepIcon =
@@ -1916,37 +1887,31 @@ Press '?', '/', or 'Esc' to close...`,
                 }
 
                 lines.push(
-                  `   {${stepColor}-fg}${stepIcon}{/} {gray-fg}${stepNumber}{/} ${step.name}{gray-fg}${duration}{/}`,
+                  `   {${stepColor}-fg}${stepIcon}{/${stepColor}-fg} {gray-fg}${stepNumber}{/gray-fg} ${step.name}{gray-fg}${duration}{/gray-fg}`,
                 )
               })
-            } else {
-              // Show summary when there's limited space (existing behavior)
-              if (job.conclusion === "success") {
-                lines.push(`   {green-fg}✓ All ${job.steps.length} steps completed{/green-fg}`)
-              } else if (job.conclusion === "failure") {
-                const failedStep = job.steps.find((s) => s.conclusion === "failure")
-                if (failedStep) {
-                  lines.push(`   {red-fg}✗ Failed at: ${failedStep.name}{/red-fg}`)
-                }
-              }
             }
           }
 
           // Show queued job steps when there's room
           else if (showAllSteps && (job.status === "queued" || job.status === "waiting")) {
+            hasSubSteps = true
             if (job.steps && job.steps.length > 0) {
-              lines.push(`   {gray-fg}Queued - ${job.steps.length} steps pending{/gray-fg}`)
+              lines.push(`   {#888888-fg}Queued - ${job.steps.length} steps pending{/#888888-fg}`)
               job.steps.forEach((step, index) => {
                 const stepNumber = `${index + 1}/${job.steps?.length}`
-                lines.push(`   {gray-fg}○ ${stepNumber} ${step.name}{/gray-fg}`)
+                lines.push(`   {#888888-fg}○ ${stepNumber} ${step.name}{/#888888-fg}`)
               })
             } else {
-              lines.push(`   {gray-fg}Waiting to start...{/gray-fg}`)
+              lines.push(`   {#888888-fg}Waiting to start...{/#888888-fg}`)
             }
           }
         }
 
-        lines.push("")
+        // Only add spacing after jobs that have sub-step detail
+        if (hasSubSteps) {
+          lines.push("")
+        }
       })
     } else {
       lines.push(" {gray-fg}Loading job details...{/gray-fg}")
@@ -2317,7 +2282,7 @@ Press '?', '/', or 'Esc' to close...`,
     }
 
     // Position PR header below Docker header if Docker header is shown
-    const prTop = this.showDocker ? 5 : 0
+    const prTop = this.dockerHeaderBox ? 5 : 0
 
     // Create PR header box with border
     this.prHeaderBox = blessed.box({
@@ -2336,7 +2301,7 @@ Press '?', '/', or 'Esc' to close...`,
         fg: "white",
         // bg removed - inherit terminal background
         border: {
-          fg: "#666666",
+          fg: "#f0f0f0",
         },
       },
     })
