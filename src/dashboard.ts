@@ -106,7 +106,7 @@ export class Dashboard {
         fg: "cyan",
         // bg removed - inherit terminal background
         border: {
-          fg: "#444444",
+          fg: "#888888",
         },
       },
       scrollable: true,
@@ -928,7 +928,7 @@ export class Dashboard {
         case "cancelled":
           return "red"
         case "skipped":
-          return "gray"
+          return "#888888"
         default:
           return "#f0f0f0"
       }
@@ -1058,7 +1058,7 @@ export class Dashboard {
   {yellow-fg}●{/} Running
   {green-fg}●{/} Success
   {red-fg}●{/} Failed
-  {gray-fg}●{/} Queued
+  {#888888-fg}●{/} Queued
 
 Press '?', '/', or 'Esc' to close...`,
       tags: true,
@@ -1532,7 +1532,7 @@ Press '?', '/', or 'Esc' to close...`,
             type: "line",
           },
           style: {
-            fg: "gray",
+            fg: "#888888",
             border: {
               fg: "#f0f0f0",
             },
@@ -1755,10 +1755,12 @@ Press '?', '/', or 'Esc' to close...`,
     // Event and commit info (removed duplicate branch line)
     lines.push(` Triggered by: {magenta-fg}${workflow.event}{/magenta-fg}`)
     if (workflow.headSha) {
-      lines.push(` Commit: {gray-fg}${workflow.headSha.substring(0, 7)}{/gray-fg}`)
+      lines.push(` Commit: {#888888-fg}${workflow.headSha.substring(0, 7)}{/#888888-fg}`)
     }
     // Show repository owner in smaller text if needed
-    lines.push(` Repo: {gray-fg}${workflow.repository.owner}/${workflow.repository.name}{/gray-fg}`)
+    lines.push(
+      ` Repo: {#888888-fg}${workflow.repository.owner}/${workflow.repository.name}{/#888888-fg}`,
+    )
     lines.push("")
 
     // Status with more detail
@@ -1772,7 +1774,7 @@ Press '?', '/', or 'Esc' to close...`,
 
     // Show dismiss hint for completed workflows
     if (workflow.status === "completed") {
-      lines.push(` {gray-fg}Press 'd' to dismiss{/gray-fg}`)
+      lines.push(` {#888888-fg}Press 'd' to dismiss{/#888888-fg}`)
     }
 
     // Timing information
@@ -1791,7 +1793,7 @@ Press '?', '/', or 'Esc' to close...`,
         new Date(workflow.createdAt).getTime()
       if (queueTime > 1000) {
         const queueSeconds = Math.floor(queueTime / 1000)
-        lines.push(` Queue time: {gray-fg}${queueSeconds}s{/gray-fg}`)
+        lines.push(` Queue time: {#888888-fg}${queueSeconds}s{/#888888-fg}`)
       }
     }
 
@@ -1875,7 +1877,7 @@ Press '?', '/', or 'Esc' to close...`,
                     ? "green"
                     : step.conclusion === "failure"
                       ? "red"
-                      : "gray"
+                      : "#888888"
 
                 let duration = ""
                 if (step.startedAt && step.completedAt) {
@@ -1887,7 +1889,7 @@ Press '?', '/', or 'Esc' to close...`,
                 }
 
                 lines.push(
-                  `   {${stepColor}-fg}${stepIcon}{/${stepColor}-fg} {gray-fg}${stepNumber}{/gray-fg} ${step.name}{gray-fg}${duration}{/gray-fg}`,
+                  `   {${stepColor}-fg}${stepIcon}{/${stepColor}-fg} {#888888-fg}${stepNumber}{/#888888-fg} ${step.name}{#888888-fg}${duration}{/#888888-fg}`,
                 )
               })
             }
@@ -1914,7 +1916,7 @@ Press '?', '/', or 'Esc' to close...`,
         }
       })
     } else {
-      lines.push(" {gray-fg}Loading job details...{/gray-fg}")
+      lines.push(" {#888888-fg}Loading job details...{/#888888-fg}")
     }
 
     return lines.join("\n")
@@ -1954,9 +1956,9 @@ Press '?', '/', or 'Esc' to close...`,
         case "failure":
           return "red"
         case "cancelled":
-          return "gray"
+          return "#888888"
         case "skipped":
-          return "gray"
+          return "#888888"
         default:
           return "white"
       }
@@ -1966,7 +1968,7 @@ Press '?', '/', or 'Esc' to close...`,
       case "in_progress":
         return "yellow"
       case "queued":
-        return "gray"
+        return "#888888"
       default:
         return "white"
     }
@@ -1992,7 +1994,7 @@ Press '?', '/', or 'Esc' to close...`,
     // Line 1: Status counts and refresh indicator
     let line1 = `${refreshIndicator}Last Update: ${updateTime.toLocaleTimeString()} | `
     line1 += `{yellow-fg}●{/} Running: ${runningCount} | `
-    line1 += `{gray-fg}○{/} Queued: ${queuedCount}`
+    line1 += `{#888888-fg}○{/} Queued: ${queuedCount}`
     if (completedCount > 0) {
       line1 += ` | {green-fg}✓{/} Done: ${completedCount}`
     }
@@ -2007,7 +2009,7 @@ Press '?', '/', or 'Esc' to close...`,
 
     if (contentChanged || this.refreshAnimationTimer) {
       this.statusBox.setContent(
-        `{center}${line1}{/center}\n{center}{gray-fg}${line2}{/gray-fg}{/center}`,
+        `{center}${line1}{/center}\n{center}{#888888-fg}${line2}{/#888888-fg}{/center}`,
       )
       this.lastStatusLine1 = line1
       this.lastStatusLine2 = line2
@@ -2354,7 +2356,7 @@ Press '?', '/', or 'Esc' to close...`,
 
   private formatDockerHeader(dockerStatuses: DockerServiceStatus[]): string {
     if (dockerStatuses.length === 0) {
-      return "{center}{gray-fg}No Docker services found{/gray-fg}{/center}"
+      return "{center}{#888888-fg}No Docker services found{/#888888-fg}{/center}"
     }
 
     const lines: string[] = []
@@ -2427,7 +2429,7 @@ Press '?', '/', or 'Esc' to close...`,
           }
         } else if (service.state === "exited") {
           icon = "○"
-          color = "gray"
+          color = "#888888"
         } else if (service.state === "restarting") {
           icon = "↻"
           color = "yellow"
@@ -2436,7 +2438,7 @@ Press '?', '/', or 'Esc' to close...`,
           color = "yellow"
         } else {
           icon = "?"
-          color = "gray"
+          color = "#888888"
         }
 
         services.push({
@@ -2452,7 +2454,7 @@ Press '?', '/', or 'Esc' to close...`,
     }
 
     if (services.length === 0 && !hasErrors) {
-      return "{center}{gray-fg}No Docker services running{/gray-fg}{/center}"
+      return "{center}{#888888-fg}No Docker services running{/#888888-fg}{/center}"
     }
 
     // Group by project (repo name without owner) for better organization
@@ -2523,7 +2525,7 @@ Press '?', '/', or 'Esc' to close...`,
       lines.splice(
         maxLines,
         lines.length,
-        ` {gray-fg}... ${totalServices} services total{/gray-fg}`,
+        ` {#888888-fg}... ${totalServices} services total{/#888888-fg}`,
       ) // 1-space margin
     }
 
@@ -2532,7 +2534,7 @@ Press '?', '/', or 'Esc' to close...`,
 
   private formatPRHeader(prs: PullRequest[]): string {
     if (prs.length === 0) {
-      return "{center}{gray-fg}No open pull requests{/gray-fg}{/center}"
+      return "{center}{#888888-fg}No open pull requests{/#888888-fg}{/center}"
     }
 
     const lines: string[] = []
@@ -2589,13 +2591,13 @@ Press '?', '/', or 'Esc' to close...`,
           }
         } else {
           statusIcon = "○"
-          statusColor = "gray"
+          statusColor = "#888888"
         }
 
         // Add draft indicator to status icon if needed
         if (pr.draft || pr.isDraft) {
           statusIcon = "◐" // Half-circle for draft
-          statusColor = "gray"
+          statusColor = "#888888"
         }
 
         // Add conflict indicator if not mergeable
@@ -2646,7 +2648,7 @@ Press '?', '/', or 'Esc' to close...`,
         lines.push(` ${prLine}`) // 1-space margin
       }
       if (prLines.length > 4) {
-        lines.push(` {gray-fg}... and ${prLines.length - 4} more{/gray-fg}`) // 1-space margin
+        lines.push(` {#888888-fg}... and ${prLines.length - 4} more{/#888888-fg}`) // 1-space margin
       }
     }
 
@@ -2659,7 +2661,7 @@ Press '?', '/', or 'Esc' to close...`,
       info: "{white-fg}",
       event: "{green-fg}",
       debug: "{cyan-fg}",
-      trace: "{gray-fg}",
+      trace: "{#888888-fg}",
       error: "{red-fg}",
     }
     const color = typeColors[type as keyof typeof typeColors] || "{white-fg}"
@@ -2720,10 +2722,10 @@ Press '?', '/', or 'Esc' to close...`,
         ? "{white-fg}[INFO]{/}"
         : this.logLevel === "debug"
           ? "{cyan-fg}[DEBUG]{/}"
-          : "{gray-fg}[TRACE]{/}"
+          : "{#888888-fg}[TRACE]{/}"
 
     // Auto-show indicator - clear ON/OFF text
-    const autoShowStatus = this.autoShowDebug ? "{green-fg}ON{/}" : "{gray-fg}OFF{/}"
+    const autoShowStatus = this.autoShowDebug ? "{green-fg}ON{/}" : "{#888888-fg}OFF{/}"
 
     // Update the label to show colored log level and auto-show status
     this.debugBox.setLabel(
