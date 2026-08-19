@@ -12,7 +12,7 @@ jobs:
       contents: read
       id-token: write # OIDC token for npm trusted publishing
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -20,7 +20,7 @@ jobs:
 
       # Node 24 is the current Active LTS (20 is EOL as of 2026-03-24).
       # Trusted publishing requires >= 22.14.0.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
