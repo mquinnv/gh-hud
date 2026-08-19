@@ -39,13 +39,20 @@ export class App {
     interval?: number
     showPRs?: boolean
     showDocker?: boolean
+    scopedRepository?: string
+    scopeDir?: string
   }): Promise<void> {
     // Load configuration
     await this.configManager.loadConfig(args.config)
 
-    // Update config with command-line arguments
-    if (args.repositories?.length) {
-      this.configManager.updateFromArgs({ repositories: args.repositories })
+    // A path argument or -r is a hard scope, not an addition to whatever the
+    // config file happens to list — otherwise configured orgs widen it back out.
+    const scoped = args.scopedRepository ? [args.scopedRepository] : args.repositories
+    if (scoped?.length) {
+      this.configManager.setScopedRepositories(scoped)
+    }
+    if (args.scopeDir) {
+      this.dockerService.setScopeDir(args.scopeDir)
     }
     if (args.organizations?.length) {
       this.configManager.updateFromArgs({ organizations: args.organizations })

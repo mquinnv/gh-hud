@@ -75,6 +75,19 @@ Or using the shorthand:
 gh-hud -r owner/repo1 owner/repo2
 ```
 
+Monitor whichever repository owns a given checkout, by path:
+
+```bash
+gh-hud .
+gh-hud ~/Projects/remix
+```
+
+A path (like `--repo`) is a *hard* scope: organizations listed in your config
+file are ignored for that run, so the dashboard shows exactly one repository.
+This is what makes gh-hud useful as a per-project pane in a tmux split. If the
+path isn't a directory, or has no `github.com` remote, gh-hud exits with an
+error rather than starting an empty dashboard.
+
 ### Monitor Organization Repositories
 
 ```bash

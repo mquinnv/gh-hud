@@ -7,6 +7,14 @@ export class DockerServiceManager {
   private cache: Map<string, { data: DockerServiceStatus; timestamp: number }> = new Map()
   private cacheTimeout = 5000 // 5 seconds, same as GitHub service
   private dockerAvailable?: boolean
+  private scopeDir?: string
+
+  /**
+   * Pin discovery to a known checkout, so we skip the project-root guessing.
+   */
+  setScopeDir(dir: string): void {
+    this.scopeDir = dir
+  }
 
   /**
    * Check if a git remote URL matches a repository
@@ -89,9 +97,16 @@ export class DockerServiceManager {
   /**
    * Get all possible repository paths from repo name (owner/repo format)
    */
-  private async getRepoPaths(repo: string, debug?: (msg: string) => void): Promise<string[]> {
+  async getRepoPaths(repo: string, debug?: (msg: string) => void): Promise<string[]> {
     const paths: string[] = []
     if (debug) debug(`Looking for repository: ${repo}`)
+
+    // Scoped to one checkout: we already know where it is, so don't go
+    // trawling ~/Projects, ~/code, ~/workspace, ... for a name match.
+    if (this.scopeDir) {
+      if (debug) debug(`Using scoped checkout: ${this.scopeDir}`)
+      return [this.scopeDir]
+    }
 
     try {
       // Try to get the current working directory's git remote

@@ -1,10 +1,62 @@
 import { execa } from "execa"
+import { existsSync } from "fs"
 import { readFile } from "fs/promises"
 import { homedir } from "os"
-import { join } from "path"
+import { join, resolve } from "path"
 import type { Dashboard } from "./dashboard.js"
 import type { GitHubService } from "./github.js"
 import type { Config, Repository } from "./types.js"
+
+// Extract "owner/repo" from a GitHub remote URL, or null if it isn't one.
+// Handles https://github.com/owner/repo(.git) and git@github.com:owner/repo(.git).
+export function parseGitHubRemote(url: string): string | null {
+  // Strip .git first so repo names containing dots (three.js) survive intact.
+  const cleaned = url.trim().replace(/\.git$/, "")
+  const match = cleaned.match(/github\.com[:/]([^/]+)\/([^/]+)$/)
+  return match ? `${match[1]}/${match[2]}` : null
+}
+
+// Resolve the GitHub repository that owns `dir`, or null if there isn't one.
+export async function resolveRepoAtPath(dir: string): Promise<string | null> {
+  try {
+    // gh knows about renames and non-origin remotes, so prefer it.
+    const { stdout } = await execa("gh", ["repo", "view", "--json", "owner,name"], {
+      cwd: dir,
+      timeout: 2000,
+    })
+    const repoInfo = JSON.parse(stdout)
+    if (repoInfo.owner?.login && repoInfo.name) {
+      return `${repoInfo.owner.login}/${repoInfo.name}`
+    }
+  } catch {
+    // Fall through to parsing the git remote directly.
+  }
+
+  try {
+    const { stdout } = await execa("git", ["remote", "get-url", "origin"], { cwd: dir })
+    return parseGitHubRemote(stdout)
+  } catch {
+    return null
+  }
+}
+
+// Turn a user-supplied path into the repository to monitor. Throws with a
+// message meant for stderr — the caller must fail before blessed takes the
+// screen, or the error becomes an invisible empty dashboard.
+export async function resolveScope(path: string): Promise<{ repo: string; dir: string }> {
+  const dir = resolve(path)
+
+  if (!existsSync(dir)) {
+    throw new Error(`No such directory: ${dir}`)
+  }
+
+  const repo = await resolveRepoAtPath(dir)
+  if (!repo) {
+    throw new Error(`Not a GitHub checkout (no github.com remote found): ${dir}`)
+  }
+
+  return { repo, dir }
+}
 
 const DEFAULT_CONFIG: Config = {
   repositories: [],
@@ -17,51 +69,6 @@ const DEFAULT_CONFIG: Config = {
 
 export class ConfigManager {
   private config: Config = { ...DEFAULT_CONFIG }
-
-  // Try to detect the current directory's GitHub repository
-  private async getCurrentRepo(): Promise<string | null> {
-    try {
-      // Try using gh CLI first (most reliable)
-      try {
-        const { stdout } = await execa("gh", ["repo", "view", "--json", "owner,name"], {
-          timeout: 2000,
-        })
-        const repoInfo = JSON.parse(stdout)
-        if (repoInfo.owner && repoInfo.name) {
-          return `${repoInfo.owner.login}/${repoInfo.name}`
-        }
-      } catch {
-        // Fall back to git remote parsing
-      }
-
-      // Check if we're in a git repository
-      await execa("git", ["rev-parse", "--git-dir"])
-
-      // Get the GitHub remote URL
-      const { stdout } = await execa("git", ["remote", "get-url", "origin"])
-
-      // Parse GitHub repo from URL with improved regex
-      // Handles: https://github.com/owner/repo.git
-      //          git@github.com:owner/repo.git
-      //          gh:owner/repo
-      const patterns = [
-        /github\.com[:/]([^/]+)\/([^/.]+)(?:\.git)?$/, // Standard format
-        /github\.com:([^/]+)\/([^/.]+)(?:\.git)?$/, // SSH format
-        /^git@github\.com:([^/]+)\/([^/.]+)(?:\.git)?$/, // Full SSH format
-      ]
-
-      for (const pattern of patterns) {
-        const match = stdout.match(pattern)
-        if (match) {
-          return `${match[1]}/${match[2]}`
-        }
-      }
-
-      return null
-    } catch {
-      return null
-    }
-  }
 
   async loadConfig(configPath?: string): Promise<Config> {
     const paths = [
@@ -87,6 +94,12 @@ export class ConfigManager {
 
   updateFromArgs(args: Partial<Config>): void {
     this.config = { ...this.config, ...args }
+  }
+
+  // An explicit scope (a path argument or -r) is a hard scope: organizations
+  // from the config file must not widen it back out.
+  setScopedRepositories(repositories: string[]): void {
+    this.config = { ...this.config, repositories, organizations: [] }
   }
 
   getConfig(): Config {
@@ -151,7 +164,7 @@ export class ConfigManager {
 
     // If no repos specified, try to use current directory's repo
     if (repos.size === 0) {
-      const currentRepo = await this.getCurrentRepo()
+      const currentRepo = await resolveRepoAtPath(process.cwd())
       if (currentRepo) {
         if (dashboard) dashboard.log(`Using current repository: ${currentRepo}`, "info")
         repos.add(currentRepo)
