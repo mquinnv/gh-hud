@@ -12,8 +12,9 @@ import type { DockerServiceStatus, Job, PullRequest, Run } from "./types.js"
 const execAsync = promisify(exec)
 
 export class App {
-  // The GitHub provider is also the PR and repository-listing service, so it is
-  // held by its concrete type as well as in the provider list.
+  // Pull requests and repository listing are GitHub-only concerns that are not
+  // on CiProvider, so the GitHub provider is also held by its concrete type.
+  // Nothing on the CI path may reach through this field.
   private github: GitHubProvider
   private providers: CiProvider[]
   private dockerService: DockerServiceManager
@@ -398,6 +399,10 @@ export class App {
     return this.providers.find((p) => p.name === run.provider)
   }
 
+  private currentScope(): Scope {
+    return { repositories: this.repositories, organizations: [] }
+  }
+
   private async performRefresh(_isManual: boolean = false): Promise<void> {
     // Don't refresh if a modal is open
     if (this.dashboard.isModalOpen()) return
@@ -410,7 +415,7 @@ export class App {
 
     try {
       // Fetch recent runs from every configured provider
-      const scope: Scope = { repositories: this.repositories, organizations: [] }
+      const scope = this.currentScope()
       const results = await Promise.all(this.providers.map((provider) => provider.fetchRuns(scope)))
 
       const allRuns: Run[] = []
@@ -588,11 +593,17 @@ export class App {
         "info",
       )
 
-      // Fetch one run older than our oldest timestamp
-      const olderWorkflows = await this.github.fetchOlderRuns(
-        this.repositories,
-        this.oldestWorkflowTimestamp,
-        1,
+      // Fetch one run older than our oldest timestamp from every provider that
+      // can page backwards; those that cannot sit resurrect out.
+      const scope = this.currentScope()
+      const before = this.oldestWorkflowTimestamp
+      const olderWorkflows: Run[] = []
+      for (const provider of this.providers) {
+        if (!provider.fetchOlderRuns) continue
+        olderWorkflows.push(...(await provider.fetchOlderRuns(scope, before, 1)))
+      }
+      olderWorkflows.sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
       )
 
       if (olderWorkflows.length === 0) {

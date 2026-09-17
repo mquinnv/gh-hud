@@ -130,10 +130,10 @@ export class GitHubProvider implements CiProvider {
    * the cache is keyed by repository, and a page of older runs must not
    * displace the page of current ones the grid is built from.
    */
-  async fetchOlderRuns(repos: string[], before: string, limit = 1): Promise<Run[]> {
+  async fetchOlderRuns(scope: Scope, before: string, limit = 1): Promise<Run[]> {
     const runs: Run[] = []
 
-    for (const repo of repos) {
+    for (const repo of scope.repositories) {
       try {
         const created = encodeURIComponent(`<${before}`)
         const { stdout } = await execa(

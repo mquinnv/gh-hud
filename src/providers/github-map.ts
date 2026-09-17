@@ -11,6 +11,7 @@ export interface GitHubRunPayload {
   head_branch: string
   head_sha: string
   run_number: number
+  event?: string
   run_started_at?: string
   status: string
   conclusion?: string | null
@@ -68,6 +69,7 @@ export function mapGitHubRun(raw: GitHubRunPayload): Run {
     isFailing: false,
     repo: { owner, name, fullName },
     actor: raw.actor?.login,
+    event: raw.event,
     commitMessage,
     webUrl: raw.html_url,
     createdAt: raw.created_at,

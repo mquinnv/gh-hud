@@ -38,6 +38,12 @@ describe("mapGitHubRun", () => {
     expect(mapGitHubRun(multiline).title).toBe("first line")
   })
 
+  // A 3am scheduled build and someone's push look identical without this.
+  test("carries the trigger event through", () => {
+    const run = mapGitHubRun(rawRun)
+    expect(run.event).toBe(rawRun.event)
+  })
+
   test("prefers run_started_at over created_at for startedAt", () => {
     const run = mapGitHubRun(rawRun)
     expect(run.startedAt).toBe(rawRun.run_started_at)

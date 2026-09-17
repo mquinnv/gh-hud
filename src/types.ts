@@ -45,6 +45,12 @@ export interface Run {
   isFailing: boolean
   repo: { owner: string; name: string; fullName: string }
   actor?: string
+  /**
+   * What kicked the run off: GitHub's `event` (push, pull_request, schedule) or
+   * Buildkite's `source` (webhook, schedule, api) — the same concept under two
+   * names. A 3am scheduled build reads very differently from someone's push.
+   */
+  event?: string
   commitMessage?: string
   webUrl: string
   createdAt: string

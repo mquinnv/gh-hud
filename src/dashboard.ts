@@ -1746,7 +1746,10 @@ Press '?', '/', or 'Esc' to close...`,
     if (run.title) {
       lines.push(` ${run.title}`)
     }
-    if (run.actor) {
+    if (run.event) {
+      const by = run.actor ? ` {#888888-fg}by ${run.actor}{/#888888-fg}` : ""
+      lines.push(` Triggered by: {magenta-fg}${run.event}{/magenta-fg}${by}`)
+    } else if (run.actor) {
       lines.push(` Triggered by: {magenta-fg}${run.actor}{/magenta-fg}`)
     }
     if (run.sha) {
@@ -1761,8 +1764,9 @@ Press '?', '/', or 'Esc' to close...`,
     const color = statusColor(run.status, run.isFailing)
     lines.push(` Status: {${color}-fg}${icon} ${run.status.toUpperCase()}{/}`)
 
+    // No separate Result line: with one neutral status there is no second
+    // verdict to print, and it would just repeat the word above.
     if (isTerminal(run.status)) {
-      lines.push(` Result: {${color}-fg}${run.status.toUpperCase()}{/}`)
       // Show dismiss hint for finished runs
       lines.push(` {#888888-fg}Press 'd' to dismiss{/#888888-fg}`)
     }
