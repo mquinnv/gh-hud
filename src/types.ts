@@ -1,73 +1,70 @@
-export interface WorkflowRun {
-  id: number
-  name: string
-  headBranch: string
-  headSha: string
-  runNumber: number
-  event: string
-  status: "queued" | "in_progress" | "completed" | "waiting"
-  conclusion?:
-    | "success"
-    | "failure"
-    | "cancelled"
-    | "neutral"
-    | "skipped"
-    | "timed_out"
-    | "action_required"
-  workflowId: number
-  workflowName: string
-  url: string
-  htmlUrl: string
-  createdAt: string
-  updatedAt: string
-  startedAt?: string
-  repository: {
-    owner: string
-    name: string
-  }
-  headCommit?: {
-    message: string
-    author: {
-      name: string
-      email: string
-    }
-  }
-}
+import type { RunStatus } from "./status.js"
 
-export interface WorkflowJob {
-  id: number
-  runId: number
-  name: string
-  status: "queued" | "in_progress" | "completed"
-  conclusion?:
-    | "success"
-    | "failure"
-    | "cancelled"
-    | "neutral"
-    | "skipped"
-    | "timed_out"
-    | "action_required"
-  startedAt?: string
-  completedAt?: string
-  steps?: WorkflowStep[]
-  runner_name?: string
-  runner_id?: number
-  runner_group_name?: string
-}
+export type Provider = "github" | "buildkite"
 
-export interface WorkflowStep {
+export interface Step {
   name: string
-  status: "queued" | "in_progress" | "completed" | "pending" | "waiting"
-  conclusion?: "success" | "failure" | "cancelled" | "neutral" | "skipped"
+  status: RunStatus
   number: number
   startedAt?: string
-  completedAt?: string
+  finishedAt?: string
+}
+
+export interface Job {
+  id: string
+  runKey: string
+  name: string
+  status: RunStatus
+  startedAt?: string
+  finishedAt?: string
+  agent?: string
+  webUrl?: string
+  steps?: Step[]
+  command?: string
+  type?: "script" | "manual" | "trigger" | "waiter"
+}
+
+export interface Run {
+  provider: Provider
+  /** Stable grid identity: `${provider}:${repo.fullName}:${id}`. */
+  key: string
+  /** Native id as a string. GitHub: databaseId. Buildkite: build UUID. */
+  id: string
+  /** run_number (GitHub) or build number (Buildkite). */
+  number: number
+  /** First line of the commit message, or GitHub's display_title. */
+  title: string
+  /** Workflow name (GitHub) or pipeline name (Buildkite), for display. */
+  pipeline: string
+  /** Buildkite only: required to address the build write endpoints. */
+  pipelineSlug?: string
+  branch: string
+  sha: string
+  status: RunStatus
+  /** Running, but a job has already failed. */
+  isFailing: boolean
+  repo: { owner: string; name: string; fullName: string }
+  actor?: string
+  commitMessage?: string
+  webUrl: string
+  createdAt: string
+  startedAt?: string
+  finishedAt?: string
 }
 
 export interface Repository {
   owner: string
   name: string
   fullName: string
+}
+
+export interface BuildkiteConfig {
+  /** Prefer $BUILDKITE_API_TOKEN, which always takes precedence over this. */
+  token?: string
+  /** Auto-detected when the token reaches exactly one organization. */
+  org?: string
+  /** Explicit pipeline slugs. Empty means: derive from `repositories`. */
+  pipelines?: string[]
 }
 
 export interface Config {
@@ -77,6 +74,7 @@ export interface Config {
   maxWorkflows?: number
   filterStatus?: string[]
   showCompletedFor?: number // minutes to show completed workflows
+  buildkite?: BuildkiteConfig
 }
 
 export interface PullRequest {
@@ -106,8 +104,8 @@ export interface PullRequest {
 }
 
 export interface DashboardState {
-  workflows: Map<string, WorkflowRun>
-  jobs: Map<string, WorkflowJob[]>
+  runs: Map<string, Run>
+  jobs: Map<string, Job[]>
   pullRequests?: PullRequest[]
   dockerServices?: DockerServiceStatus[]
   lastUpdate: Date
