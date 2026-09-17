@@ -3,22 +3,28 @@ import { promisify } from "util"
 import { ConfigManager } from "./config.js"
 import { Dashboard } from "./dashboard.js"
 import { DockerServiceManager } from "./docker-utils.js"
-import { GitHubService } from "./github.js"
-import type { DockerServiceStatus, PullRequest, WorkflowJob, WorkflowRun } from "./types.js"
+import { GitHubProvider } from "./providers/github.js"
+import { applyIsFailing } from "./providers/github-map.js"
+import type { CiProvider, Scope } from "./providers/types.js"
+import { isActive } from "./status.js"
+import type { DockerServiceStatus, Job, PullRequest, Run } from "./types.js"
 
 const execAsync = promisify(exec)
 
 export class App {
-  private githubService: GitHubService
+  // The GitHub provider is also the PR and repository-listing service, so it is
+  // held by its concrete type as well as in the provider list.
+  private github: GitHubProvider
+  private providers: CiProvider[]
   private dockerService: DockerServiceManager
   private configManager: ConfigManager
   private dashboard: Dashboard
   private refreshInterval?: NodeJS.Timeout
   private repositories: string[] = []
-  private jobs: Map<string, WorkflowJob[]> = new Map()
+  private jobs: Map<string, Job[]> = new Map() // Keyed by Run.key
   private isRefreshing = false
-  private watchedWorkflows: Set<number> = new Set() // Track workflows we've been watching
-  private completedWorkflows: Map<number, WorkflowRun> = new Map() // Keep completed workflows until dismissed
+  private watchedWorkflows: Set<string> = new Set() // Run keys we've been watching
+  private completedWorkflows: Map<string, Run> = new Map() // Keep finished runs until dismissed
   private showPRs = false
   private pullRequests: PullRequest[] = []
   private showDocker = false
@@ -26,7 +32,8 @@ export class App {
   private oldestWorkflowTimestamp?: string // Track the oldest workflow timestamp for resurrect feature
 
   constructor() {
-    this.githubService = new GitHubService()
+    this.github = new GitHubProvider()
+    this.providers = [this.github]
     this.dockerService = new DockerServiceManager()
     this.configManager = new ConfigManager()
     this.dashboard = new Dashboard()
@@ -66,10 +73,7 @@ export class App {
     this.showDocker = args.showDocker || false
 
     // Build repository list
-    this.repositories = await this.configManager.buildRepositoryList(
-      this.githubService,
-      this.dashboard,
-    )
+    this.repositories = await this.configManager.buildRepositoryList(this.github, this.dashboard)
 
     if (this.repositories.length === 0) {
       // Will show empty state in UI
@@ -97,10 +101,10 @@ export class App {
       this.stop()
     })
 
-    // Handle opening workflow in browser
-    this.dashboard.onOpenWorkflow(async (workflow: WorkflowRun) => {
+    // Handle opening a run in browser
+    this.dashboard.onOpenRun(async (run: Run) => {
       try {
-        const url = workflow.htmlUrl
+        const url = run.webUrl
         const platform = process.platform
 
         let command: string
@@ -140,36 +144,38 @@ export class App {
       }
     })
 
-    // Handle dismissing completed workflows
-    this.dashboard.onDismissWorkflow((workflow: WorkflowRun) => {
-      this.dismissCompletedWorkflow(workflow.id)
+    // Handle dismissing finished runs
+    this.dashboard.onDismissRun((run: Run) => {
+      this.dismissRun(run.key)
     })
 
-    // Handle dismissing all completed workflows
-    this.dashboard.onDismissAllCompleted((workflows: WorkflowRun[]) => {
-      this.dismissAllCompletedWorkflows(workflows)
+    // Handle dismissing all finished runs
+    this.dashboard.onDismissAllCompleted((runs: Run[]) => {
+      this.dismissAllCompletedRuns(runs)
     })
 
-    // Handle resurrect older workflow
-    this.dashboard.onResurrectWorkflow(() => {
-      this.resurrectOldestWorkflow()
+    // Handle resurrect older run
+    this.dashboard.onResurrectRun(() => {
+      this.resurrectOldestRun()
     })
 
-    // Handle killing/cancelling workflow
-    this.dashboard.onKillWorkflow(async (workflow: WorkflowRun) => {
+    // Handle killing/cancelling a run
+    this.dashboard.onKillRun(async (run: Run) => {
+      const provider = this.providerFor(run)
+      if (!provider) {
+        this.dashboard.log(`No provider for ${run.provider}`, "error")
+        return
+      }
+
       try {
-        const repoName = `${workflow.repository.owner}/${workflow.repository.name}`
-        this.dashboard.log(`Cancelling workflow run ${workflow.id} in ${repoName}...`, "info")
+        this.dashboard.log(`Cancelling run ${run.id} in ${run.repo.fullName}...`, "info")
+        await provider.cancel(run)
 
-        // Execute gh command to cancel the workflow
-        const command = `gh run cancel ${workflow.id} -R ${repoName}`
-        await execAsync(command)
-
-        this.dashboard.log(`Successfully cancelled workflow run ${workflow.id}`, "info")
+        this.dashboard.log(`Successfully cancelled run ${run.id}`, "info")
         // Force refresh to update the status
         await this.performRefresh(true)
       } catch (error) {
-        this.dashboard.log(`Failed to cancel workflow: ${error}`, "error")
+        this.dashboard.log(`Failed to cancel run: ${error}`, "error")
       }
     })
 
@@ -339,47 +345,57 @@ export class App {
       }
     })
 
-    // Handle workflow rerun
-    this.dashboard.onWorkflowRerun(async (workflow: WorkflowRun) => {
+    // Handle run rerun
+    this.dashboard.onRunRerun(async (run: Run) => {
+      const provider = this.providerFor(run)
+      if (!provider) {
+        this.dashboard.log(`No provider for ${run.provider}`, "error")
+        return
+      }
+
       try {
-        const repoName = `${workflow.repository.owner}/${workflow.repository.name}`
-        this.dashboard.log(`Re-running workflow ${workflow.id} in ${repoName}...`, "info")
+        this.dashboard.log(`Re-running run ${run.id} in ${run.repo.fullName}...`, "info")
+        await provider.rerun(run)
 
-        const command = `gh run rerun ${workflow.id} -R ${repoName}`
-        await execAsync(command)
-
-        this.dashboard.log(`Successfully triggered rerun of workflow ${workflow.id}`, "info")
+        this.dashboard.log(`Successfully triggered rerun of run ${run.id}`, "info")
         await this.performRefresh(true)
       } catch (error) {
-        this.dashboard.log(`Failed to rerun workflow: ${error}`, "error")
+        this.dashboard.log(`Failed to rerun run: ${error}`, "error")
       }
     })
 
-    // Handle workflow logs
-    this.dashboard.onWorkflowLogs(async (workflow: WorkflowRun) => {
-      try {
-        const repoName = `${workflow.repository.owner}/${workflow.repository.name}`
-        this.dashboard.log(`Fetching logs for workflow ${workflow.id}...`, "info")
+    // Handle run logs
+    this.dashboard.onRunLogs(async (run: Run) => {
+      const provider = this.providerFor(run)
+      if (!provider) {
+        this.dashboard.log(`No provider for ${run.provider}`, "error")
+        return
+      }
 
-        const command = `gh run view ${workflow.id} -R ${repoName} --log`
-        const { stdout } = await execAsync(command)
+      try {
+        this.dashboard.log(`Fetching logs for run ${run.id}...`, "info")
+        const output = await provider.logs(run)
 
         // Show first 20 lines of logs in the dashboard
-        const logLines = stdout.split("\n").slice(0, 20)
-        logLines.forEach((line) => {
+        const logLines = output.split("\n")
+        logLines.slice(0, 20).forEach((line) => {
           this.dashboard.log(line, "info")
         })
 
-        if (stdout.split("\n").length > 20) {
+        if (logLines.length > 20) {
           this.dashboard.log(
-            `... (truncated, run 'gh run view ${workflow.id} -R ${repoName} --log' for full logs)`,
+            `... (truncated, ${logLines.length} lines total; open the run for full logs)`,
             "info",
           )
         }
       } catch (error) {
-        this.dashboard.log(`Failed to fetch workflow logs: ${error}`, "error")
+        this.dashboard.log(`Failed to fetch run logs: ${error}`, "error")
       }
     })
+  }
+
+  private providerFor(run: Run): CiProvider | undefined {
+    return this.providers.find((p) => p.name === run.provider)
   }
 
   private async performRefresh(_isManual: boolean = false): Promise<void> {
@@ -393,12 +409,29 @@ export class App {
     this.dashboard.showLoadingInStatus()
 
     try {
-      // Fetch all recent workflows
-      const allRuns = await this.githubService.getAllRecentWorkflows(this.repositories)
+      // Fetch recent runs from every configured provider
+      const scope: Scope = { repositories: this.repositories, organizations: [] }
+      const results = await Promise.all(this.providers.map((provider) => provider.fetchRuns(scope)))
+
+      const allRuns: Run[] = []
+      const providerJobs = new Map<string, Job[]>()
+      for (const result of results) {
+        allRuns.push(...result.runs)
+        // Providers that embed jobs in their run payloads save us a round trip.
+        if (result.jobs) {
+          for (const [key, jobs] of result.jobs) {
+            providerJobs.set(key, jobs)
+          }
+        }
+        for (const diagnostic of result.diagnostics) {
+          this.dashboard.log(diagnostic.message, diagnostic.level === "error" ? "error" : "info")
+        }
+      }
+      allRuns.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
 
       // Fetch PRs if requested
       if (this.showPRs) {
-        this.pullRequests = await this.githubService.getAllPullRequests(this.repositories)
+        this.pullRequests = await this.github.getAllPullRequests(this.repositories)
       }
 
       // Fetch Docker services if requested
@@ -425,13 +458,14 @@ export class App {
         }
       }
 
-      // Update watched and completed trackers
+      // Update watched and completed trackers, keyed by Run.key: ids are only
+      // unique within a provider.
       for (const run of allRuns) {
-        if (run.status !== "completed") {
-          this.watchedWorkflows.add(run.id)
-        } else if (this.watchedWorkflows.has(run.id) && !this.completedWorkflows.has(run.id)) {
-          // Transitioned to completed while being watched
-          this.completedWorkflows.set(run.id, run)
+        if (isActive(run.status)) {
+          this.watchedWorkflows.add(run.key)
+        } else if (this.watchedWorkflows.has(run.key) && !this.completedWorkflows.has(run.key)) {
+          // Reached a verdict while being watched
+          this.completedWorkflows.set(run.key, run)
         }
       }
 
@@ -441,28 +475,33 @@ export class App {
         this.oldestWorkflowTimestamp = oldestRun.createdAt
       }
 
-      // Visible workflows = active runs + completed pending confirmation, excluding dismissed
-      const workflows = allRuns.filter((run) => {
-        if (run.status !== "completed") return true
-        return this.completedWorkflows.has(run.id)
+      // Visible runs = active runs + finished ones pending confirmation, excluding dismissed
+      const visibleRuns = allRuns.filter((run) => {
+        if (isActive(run.status)) return true
+        return this.completedWorkflows.has(run.key)
       })
 
-      // Fetch jobs for active workflows
-      const jobPromises = workflows
-        .filter((w) => w.status !== "completed")
-        .map(async (workflow) => {
-          const repo = `${workflow.repository.owner}/${workflow.repository.name}`
-          const jobs = await this.githubService.getWorkflowJobs(repo, workflow.id)
-          return { id: workflow.id.toString(), jobs }
+      // Fetch jobs for active runs, unless the provider already handed them over
+      const jobPromises = visibleRuns
+        .filter((run) => isActive(run.status))
+        .map(async (run) => {
+          const embedded = providerJobs.get(run.key)
+          if (embedded) return { key: run.key, jobs: embedded }
+          const provider = this.providerFor(run)
+          const jobs = provider ? await provider.fetchJobs(run) : []
+          return { key: run.key, jobs }
         })
 
       const jobResults = await Promise.all(jobPromises)
 
       // Update jobs map
       this.jobs.clear()
-      jobResults.forEach(({ id, jobs }) => {
-        this.jobs.set(id, jobs)
+      jobResults.forEach(({ key, jobs }) => {
+        this.jobs.set(key, jobs)
       })
+
+      // A run that is still going but already has a failed job is doomed; say so.
+      const workflows = visibleRuns.map((run) => applyIsFailing(run, this.jobs.get(run.key) ?? []))
 
       // Update dashboard - only pass PRs/Docker data when those features are enabled
       this.dashboard.updateWorkflows(
@@ -497,18 +536,18 @@ export class App {
     }
   }
 
-  private dismissCompletedWorkflow(workflowId: number): void {
-    this.completedWorkflows.delete(workflowId)
-    this.watchedWorkflows.delete(workflowId)
+  private dismissRun(key: string): void {
+    this.completedWorkflows.delete(key)
+    this.watchedWorkflows.delete(key)
     // Update display immediately without API refresh
     this.updateDisplayAfterDismiss()
   }
 
-  private dismissAllCompletedWorkflows(workflows: WorkflowRun[]): void {
-    // Remove all completed workflows from tracking
-    workflows.forEach((workflow) => {
-      this.completedWorkflows.delete(workflow.id)
-      this.watchedWorkflows.delete(workflow.id)
+  private dismissAllCompletedRuns(runs: Run[]): void {
+    // Remove all finished runs from tracking
+    runs.forEach((run) => {
+      this.completedWorkflows.delete(run.key)
+      this.watchedWorkflows.delete(run.key)
     })
     // Update display immediately without API refresh
     this.updateDisplayAfterDismiss()
@@ -519,8 +558,8 @@ export class App {
     // This avoids an expensive API call just to update the display
     const currentWorkflows = this.dashboard.getCurrentWorkflows()
     const filteredWorkflows = currentWorkflows.filter((run) => {
-      if (run.status !== "completed") return true
-      return this.completedWorkflows.has(run.id)
+      if (isActive(run.status)) return true
+      return this.completedWorkflows.has(run.key)
     })
 
     // Update dashboard with filtered workflows immediately
@@ -532,7 +571,7 @@ export class App {
     )
   }
 
-  async resurrectOldestWorkflow(): Promise<void> {
+  async resurrectOldestRun(): Promise<void> {
     this.dashboard.log(
       `Resurrect called - timestamp: ${this.oldestWorkflowTimestamp}, repos: ${this.repositories.length}`,
       "info",
@@ -549,8 +588,8 @@ export class App {
         "info",
       )
 
-      // Fetch one workflow older than our oldest timestamp
-      const olderWorkflows = await this.githubService.getOlderWorkflows(
+      // Fetch one run older than our oldest timestamp
+      const olderWorkflows = await this.github.fetchOlderRuns(
         this.repositories,
         this.oldestWorkflowTimestamp,
         1,
@@ -566,7 +605,7 @@ export class App {
 
       // Add the older workflow as completed (so it shows up but is visually distinct)
       const resurrectedWorkflow = olderWorkflows[0]
-      this.completedWorkflows.set(resurrectedWorkflow.id, resurrectedWorkflow)
+      this.completedWorkflows.set(resurrectedWorkflow.key, resurrectedWorkflow)
 
       // Update oldest timestamp for next resurrect
       this.oldestWorkflowTimestamp = resurrectedWorkflow.createdAt
@@ -583,7 +622,7 @@ export class App {
       )
 
       this.dashboard.log(
-        `Resurrected workflow: ${resurrectedWorkflow.name || resurrectedWorkflow.workflowName}`,
+        `Resurrected workflow: ${resurrectedWorkflow.title || resurrectedWorkflow.pipeline}`,
         "info",
       )
     } catch (error) {

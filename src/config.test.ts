@@ -4,15 +4,15 @@ import { mkdtemp } from "fs/promises"
 import { tmpdir } from "os"
 import { isAbsolute, join } from "path"
 import { ConfigManager, parseGitHubRemote, resolveRepoAtPath, resolveScope } from "./config.js"
-import type { GitHubService } from "./github.js"
+import type { GitHubProvider } from "./providers/github.js"
 import type { Repository } from "./types.js"
 
-// A GitHubService whose org listing returns a repo we should never see once
+// A GitHubProvider whose org listing returns a repo we should never see once
 // an explicit scope is in play — if it leaks into the result, orgs weren't cleared.
-function githubReturningOrgRepo(fullName: string): GitHubService {
+function githubReturningOrgRepo(fullName: string): GitHubProvider {
   return {
     listRepositories: async (): Promise<Repository[]> => [{ fullName } as Repository],
-  } as unknown as GitHubService
+  } as unknown as GitHubProvider
 }
 
 describe("parseGitHubRemote", () => {

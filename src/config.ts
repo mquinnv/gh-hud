@@ -4,7 +4,7 @@ import { readFile } from "fs/promises"
 import { homedir } from "os"
 import { join, resolve } from "path"
 import type { Dashboard } from "./dashboard.js"
-import type { GitHubService } from "./github.js"
+import type { GitHubProvider } from "./providers/github.js"
 import type { Config, Repository } from "./types.js"
 
 // Extract "owner/repo" from a GitHub remote URL, or null if it isn't one.
@@ -131,10 +131,7 @@ export class ConfigManager {
   }
 
   // Build final list of repositories from config and orgs
-  async buildRepositoryList(
-    githubService: GitHubService,
-    dashboard?: Dashboard,
-  ): Promise<string[]> {
+  async buildRepositoryList(github: GitHubProvider, dashboard?: Dashboard): Promise<string[]> {
     const repos = new Set<string>()
 
     // Add explicitly configured repositories
@@ -147,7 +144,7 @@ export class ConfigManager {
       try {
         if (dashboard) dashboard.log(`Fetching repositories for org: ${org}`, "debug")
         const orgRepos = await Promise.race([
-          githubService.listRepositories(org),
+          github.listRepositories(org),
           new Promise<Repository[]>((_, reject) =>
             setTimeout(() => reject(new Error("Timeout")), 15000),
           ),
