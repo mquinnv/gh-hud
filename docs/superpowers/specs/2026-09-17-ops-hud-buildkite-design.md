@@ -198,12 +198,26 @@ rather than papering over it.
 for jobs (as today — `App` already fetches jobs lazily for displayed cards).
 It returns `jobs: undefined`.
 
-**Buildkite** is not. `GET /v2/organizations/{org}/builds?per_page=N` returns
-every build in the org **with its jobs embedded** (jobs are included unless
-`exclude_jobs=true`). One request covers all 40+ pipelines. `fetchRuns`
-therefore returns the jobs alongside the runs, and `App` skips the per-run job
-fetch when they are already present. Forcing Buildkite into the GitHub N+1
-shape would turn one request into forty.
+**Buildkite** is not: its build payloads carry **jobs embedded** (jobs are
+included by default; `exclude_jobs=true` is opt-in — note that the Buildkite
+MCP server sends that flag, so payloads seen through it are *not* what the API
+returns by default). `fetchRuns` therefore returns jobs alongside runs, and
+`App` skips the per-run job fetch when they are already present.
+
+Which endpoint depends on the scope, and this matters:
+
+- **Scoped to specific repositories** (the common case, `ops-hud .`): resolve
+  the repos to pipeline slugs via the index below, then fetch
+  `/v2/organizations/{org}/pipelines/{slug}/builds?per_page=N` per pipeline.
+  Usually one or two calls.
+- **Unscoped** (watching the whole org): one
+  `/v2/organizations/{org}/builds?per_page=N`.
+
+The org-wide endpoint returns the N most recent builds across *all* pipelines
+and offers no pipeline filter. With 40+ pipelines, a repo-scoped view served
+from that endpoint would routinely find none of its own builds inside the
+window and show an empty grid. Hence the split, and hence the pipeline index is
+required rather than merely convenient.
 
 Transports differ, and that is fine: GitHub shells out to `gh` (which owns
 auth); Buildkite uses `fetch` with `Authorization: Bearer $TOKEN`. The existing
@@ -249,10 +263,21 @@ already parses that exact form and strips `.git`. So:
 1. On startup, fetch `/v2/organizations/{org}/pipelines` once.
 2. Build an index `owner/repo -> pipeline slugs` by running each pipeline's
    `repository` field through the existing parser.
-3. `ops-hud ~/Projects/usm` resolves cwd -> `inetalliance/usm` -> both its
-   Actions runs and its `site-content-usm` builds.
+3. `ops-hud ~/Projects/usm` resolves cwd -> `inetalliance/usm` -> its
+   `site-content-usm` pipeline (and its GitHub pull requests).
 
 Scope resolution stays a single concept; it fans out to two providers.
+
+The index must follow `Link: rel="next"` — the org has 40+ pipelines across
+three pages at the default page size. Builds also carry `pipeline.repository`
+inline, so mapping a *fetched* build back to a repo never needs the index; the
+index exists to decide **which pipelines to fetch** before any build is seen,
+and to tell "no such pipeline" apart from "pipeline exists but has been idle."
+
+Note the org is not only `site-content-*`: it also holds `beejax` and scheduled
+maintenance pipelines such as `beejax-platform-media-webp-reconcile` and
+`beejax-platform-credential-check`. Nothing may assume the `site-content-`
+prefix.
 
 The Buildkite org is a single string. If it is not configured, ops-hud calls
 `GET /v2/organizations` once: exactly one org, use it silently; zero or several,
