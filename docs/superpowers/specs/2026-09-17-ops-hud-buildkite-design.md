@@ -18,12 +18,19 @@ but breaking (binary name, config filename), so it ships as 2.0.0.
 
 AmeriGlide's Buildkite org (`ameriglide`, created 2026-09-16) holds 40+
 `site-content-*` pipelines, each mapped 1:1 onto a `github.com/inetalliance/*`
-repository. These appear to be the successor to the `site-content-cd`
-GitHub Actions dispatch path. During and after that transition, a single repo's
-CI state lives in two systems at once, and there is no one place to watch it.
+repository. These replaced the `site-content-cd` GitHub Actions dispatch path,
+and **the cutover is complete: `inetalliance/*` no longer has Actions workflows
+at all.**
 
-The name `gh-hud` also no longer describes the tool: it already shows Docker
-Compose services and pull requests, and will now show a second CI provider.
+That makes this a fleet-level split rather than a transitional overlap. CI state
+for different repositories now lives in different systems — `phenixcrm/*` on
+GitHub Actions with self-hosted runners, `inetalliance/*` on Buildkite — with no
+single place to watch them together. The value of the combined grid is watching
+one fleet across two providers, not watching one repo in two systems.
+
+The name `gh-hud` is also no longer accurate: the tool already shows Docker
+Compose services and pull requests, and for the `inetalliance` repos the only
+thing it would show from GitHub is pull requests.
 
 ## Goals
 
@@ -274,6 +281,33 @@ rename alone never breaks an existing user.
 
 New flags: `--bk-org`, `--pipeline`, `--no-buildkite`, `--no-github`.
 
+#### Silent-empty-grid diagnostics
+
+Because `inetalliance/*` has no Actions workflows, a checkout there produces
+**zero** GitHub runs by design. A Buildkite resolution failure therefore yields
+an empty grid indistinguishable from "nothing is running" — the same invisible
+failure that `resolveScope()` was written to prevent for paths.
+
+Each provider must report *why* it contributed nothing, surfaced in the event
+log at `info` and in the empty-state panel when the grid has no cards at all:
+
+| condition | message |
+| --- | --- |
+| no token found | `Buildkite: no token ($BUILDKITE_API_TOKEN or buildkite.token) — skipped` |
+| token rejected (401/403) | `Buildkite: token rejected — check scopes (needs read_builds, read_pipelines)` |
+| org unset, several reachable | `Buildkite: several orgs reachable (a, b) — set buildkite.org or --bk-org` |
+| org unset, none reachable | `Buildkite: token reaches no organizations` |
+| repo matched no pipeline | `Buildkite: no pipeline in {org} builds {owner}/{repo}` |
+| provider disabled by flag | `Buildkite: disabled (--no-buildkite)` |
+
+The distinction that matters: **no token is a silent skip** (the tool must stay
+usable without a Buildkite account), but **a token that is present and fails is
+loud.** A misconfigured token must never look like an idle CI system.
+
+Unlike `resolveScope`, these cannot abort before blessed takes the screen — they
+are discovered during refresh — so they go to the log pane and empty state
+rather than stderr.
+
 ### 5. The rename
 
 54 occurrences across 15 files. Three need care:
@@ -309,8 +343,8 @@ Eight unreferenced scratch files at the repo root are deleted:
 matches `*.test.ts`), and five contain `gh-hud` strings that would otherwise
 need renaming. Deleting is cheaper than renaming dead code.
 
-`FIXES_APPLIED.md` appears to be a stale scratch note in the same category.
-**Confirm with Michael before removing it.**
+`FIXES_APPLIED.md` is a stale scratch note in the same category and is deleted
+too (confirmed 2026-09-17).
 
 This is in scope only because it sits in the rename's blast radius. No other
 refactoring is proposed.
@@ -329,6 +363,8 @@ function:
 - **Pipeline `repository` -> `owner/repo` index**, reusing `parseGitHubRemote`.
 - **Config precedence** — env token beats config token; legacy config and prefs
   paths resolve; **no token means the provider is disabled and nothing crashes**.
+- **Diagnostics** — each row of the silent-empty-grid table produces its
+  message, and a present-but-failing token is never silent.
 
 To make the status tests possible, the icon and color logic moves out of
 `dashboard.ts` into a new `src/status.ts`. That is a narrow extraction in direct
