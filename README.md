@@ -1,47 +1,53 @@
-# gh-hud
+# ops-hud
 
-A terminal-based dashboard for monitoring GitHub Actions workflows across multiple repositories. Similar to `gh run watch` but displays multiple workflows simultaneously in a grid layout.
+A terminal-based CI dashboard that shows GitHub Actions runs and Buildkite
+builds side by side, across multiple repositories, in a single grid. Similar
+to `gh run watch`, but for more than one workflow and more than one provider
+at once.
 
-![GitHub Workflow Monitor](https://img.shields.io/badge/version-1.1.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## Features
 
 - 🎯 **Auto-Detection**: Automatically monitors the current directory's GitHub repository when run without arguments
-- 📊 **Multi-Repository Monitoring**: Watch workflows from multiple repositories and organizations simultaneously
+- 🔀 **Two Providers, One Grid**: GitHub Actions runs and Buildkite builds render as the same kind of card, side by side
+- 📊 **Multi-Repository Monitoring**: Watch runs from multiple repositories and organizations simultaneously
 - 🔄 **Auto-Refresh**: Configurable refresh interval with smooth animated spinner
-- 🎨 **Color-Coded Status**: Visual indicators for workflow status (running, success, failure, queued)
-- ⌨️ **Keyboard Navigation**: Navigate between workflows using arrow keys or vim-style keys
-- 📐 **Dynamic Layout**: Automatically adjusts grid layout based on terminal size and number of workflows
+- 🎨 **Color-Coded Status**: Visual indicators for run status (running, success, failure, queued)
+- ⌨️ **Keyboard Navigation**: Navigate between runs using arrow keys or vim-style keys
+- 📐 **Dynamic Layout**: Automatically adjusts grid layout based on terminal size and number of runs
 - 🔧 **Configurable**: Support for configuration files and command-line arguments
 - 📦 **Job Details**: View individual job status and current running steps
 - 📝 **Event Log**: Built-in event log with configurable log levels (INFO/DEBUG/TRACE)
 - 💾 **Persistent Settings**: Remembers your preferences between sessions
-- 📊 **Enhanced Status Bar**: Two-line status display with keyboard shortcuts reference
-- 🔔 **Pull Request Monitoring**: Optional display of open pull requests (--show-prs flag)
-- 🐳 **Docker Compose Monitoring**: Optional display of Docker service status (--show-docker flag)
+- 📊 **Enhanced Status Bar**: Two-line status display with keyboard shortcuts reference, plus a visible warning when a provider is failing
+- 🔔 **Pull Request Monitoring**: Optional display of open pull requests (`--show-prs`)
+- 🐳 **Docker Compose Monitoring**: Optional display of Docker service status (`--show-docker`)
 
 ## Prerequisites
 
-- Node.js 18+ 
-- `gh` CLI tool installed and authenticated
-- GitHub access to repositories you want to monitor
+- Node.js 18+
+- `gh` CLI tool installed and authenticated, for GitHub Actions monitoring
+- A Buildkite API access token, for Buildkite monitoring (see below)
 - Docker (optional, required only for Docker service monitoring)
+
+Both providers are optional and independent: run with just `gh` authenticated,
+just a Buildkite token set, or both.
 
 ## Installation
 
 ### From npm (recommended)
 
 ```bash
-npm install -g gh-hud
+npm install -g ops-hud
 ```
 
 ### From source
 
 ```bash
 # Clone the repository
-git clone https://github.com/mquinnv/gh-hud.git
-cd gh-hud
+git clone https://github.com/mquinnv/ops-hud.git
+cd ops-hud
 
 # Install dependencies
 bun install
@@ -60,75 +66,156 @@ bun link
 When in a GitHub repository directory, monitor that repository:
 
 ```bash
-gh-hud
+ops-hud
 ```
 
 Monitor specific repositories:
 
 ```bash
-gh-hud --repo owner/repo1 owner/repo2
+ops-hud --repo owner/repo1 owner/repo2
 ```
 
 Or using the shorthand:
 
 ```bash
-gh-hud -r owner/repo1 owner/repo2
+ops-hud -r owner/repo1 owner/repo2
 ```
 
 Monitor whichever repository owns a given checkout, by path:
 
 ```bash
-gh-hud .
-gh-hud ~/Projects/remix
+ops-hud .
+ops-hud ~/Projects/remix
 ```
 
 A path (like `--repo`) is a *hard* scope: organizations listed in your config
 file are ignored for that run, so the dashboard shows exactly one repository.
-This is what makes gh-hud useful as a per-project pane in a tmux split. If the
-path isn't a directory, or has no `github.com` remote, gh-hud exits with an
+This is what makes ops-hud useful as a per-project pane in a tmux split. If the
+path isn't a directory, or has no `github.com` remote, ops-hud exits with an
 error rather than starting an empty dashboard.
 
 ### Monitor Organization Repositories
 
 ```bash
-gh-hud --org mquinnv --org phenixcrm
+ops-hud --org mquinnv --org phenixcrm
 ```
 
 ### Custom Refresh Interval
 
 ```bash
-gh-hud --interval 10  # Refresh every 10 seconds
+ops-hud --interval 10  # Refresh every 10 seconds
 ```
 
 ### Using Configuration File
 
 ```bash
-gh-hud --config ~/.gh-hud.json
+ops-hud --config ~/.ops-hud.json
 ```
 
 ### Show Pull Requests
 
 ```bash
-gh-hud --show-prs  # Display open PRs in header
+ops-hud --show-prs  # Display open PRs in header
 ```
 
 ### Show Docker Services
 
 ```bash
-gh-hud --show-docker  # Display Docker Compose service status
-gh-hud -d             # Short form
+ops-hud --show-docker  # Display Docker Compose service status
+ops-hud -d             # Short form
 ```
 
 ### Combined Features
 
 ```bash
-gh-hud --show-prs --show-docker  # Show both PRs and Docker services
-gh-hud -p -d                     # Short form
+ops-hud --show-prs --show-docker  # Show both PRs and Docker services
+ops-hud -p -d                     # Short form
 ```
+
+### Choosing providers
+
+```bash
+ops-hud --no-buildkite   # GitHub Actions only
+ops-hud --no-github      # Buildkite only
+```
+
+`--no-github` disables GitHub Actions *runs* only. Pull requests are governed
+separately by `--show-prs`, so `ops-hud --no-github --show-prs` still shows
+PRs — GitHub is still used to resolve the current checkout's repository and
+to fetch PRs, just not to list workflow runs.
+
+### Buildkite options
+
+```bash
+ops-hud --bk-org my-buildkite-org        # Skip org auto-detection
+ops-hud --pipeline backend frontend      # Watch specific pipeline slugs
+```
+
+## Buildkite setup
+
+Buildkite support needs an API access token with, at minimum, the
+`read_builds` and `read_pipelines` scopes. Add `write_builds` if you want to
+cancel or rebuild from the dashboard, and `read_build_logs` if you want to
+view logs. (The cancel/rebuild requests are implemented against Buildkite's
+documented REST reference, but have not yet been exercised against a live
+token — if one 405s, that's a code bug, not a config problem.)
+
+Provide the token as an environment variable:
+
+```bash
+export BUILDKITE_API_TOKEN=bkua_xxxxxxxx
+```
+
+`$BUILDKITE_API_TOKEN` always takes precedence over a `buildkite.token` set in
+the config file. Prefer the environment variable — a token committed to a
+config file on disk is a plaintext credential, so only use `buildkite.token`
+for a value you're comfortable having sit unencrypted in `~/.ops-hud.json`.
+
+### Organization
+
+If your token reaches exactly one Buildkite organization, ops-hud detects it
+automatically. If it reaches more than one, name it explicitly:
+
+```json
+{
+  "buildkite": {
+    "org": "my-buildkite-org"
+  }
+}
+```
+
+or pass `--bk-org my-buildkite-org` on the command line (the flag wins over
+the config file).
+
+### Mapping a checkout to its pipeline(s)
+
+By default, ops-hud finds the Buildkite pipeline(s) for a repository by
+matching the pipeline's configured repository URL (a git remote) against the
+GitHub repositories you're already watching. A pipeline whose "Repository"
+setting points at `git@github.com:owner/repo.git` is matched to `owner/repo`
+automatically — no extra configuration needed if your pipelines already point
+at the right remotes.
+
+If that derivation doesn't find the right pipeline (or you want to watch a
+pipeline whose GitHub checkout isn't otherwise in scope), list pipeline slugs
+explicitly — this always wins over derivation from repositories:
+
+```json
+{
+  "buildkite": {
+    "pipelines": ["my-pipeline", "my-other-pipeline"]
+  }
+}
+```
+
+or with `--pipeline my-pipeline my-other-pipeline`. With no repositories
+scoped and no explicit pipeline list, ops-hud watches builds across the whole
+organization.
 
 ## Configuration
 
-Create a `.gh-hud.json` file in your home directory or project root:
+Create a `.ops-hud.json` file in your home directory or project root (see
+`example.ops-hud.json`):
 
 ```json
 {
@@ -143,7 +230,11 @@ Create a `.gh-hud.json` file in your home directory or project root:
   "refreshInterval": 5000,
   "maxWorkflows": 20,
   "filterStatus": ["in_progress", "queued"],
-  "showCompletedFor": 5
+  "showCompletedFor": 5,
+  "buildkite": {
+    "org": "my-buildkite-org",
+    "pipelines": ["my-pipeline"]
+  }
 }
 ```
 
@@ -154,9 +245,28 @@ Create a `.gh-hud.json` file in your home directory or project root:
 | `repositories` | string[] | [] | Specific repositories to monitor |
 | `organizations` | string[] | [] | Organizations to monitor |
 | `refreshInterval` | number | 5000 | Refresh interval in milliseconds |
-| `maxWorkflows` | number | 20 | Maximum number of workflows to display |
-| `filterStatus` | string[] | ["in_progress", "queued"] | Filter workflows by status |
-| `showCompletedFor` | number | 5 | Minutes to show completed workflows |
+| `maxWorkflows` | number | 20 | Maximum number of runs to display |
+| `filterStatus` | string[] | ["in_progress", "queued"] | Filter runs by status |
+| `showCompletedFor` | number | 5 | Minutes to show completed runs |
+| `buildkite.token` | string | — | Buildkite API token; `$BUILDKITE_API_TOKEN` takes precedence |
+| `buildkite.org` | string | auto-detected | Buildkite organization slug |
+| `buildkite.pipelines` | string[] | derived from `repositories` | Explicit Buildkite pipeline slugs to watch |
+
+## Command-line flags
+
+| Flag | Description |
+|------|-------------|
+| `-r, --repo <repositories...>` | Specific repositories to watch (`owner/repo`) |
+| `-c, --config <path>` | Path to configuration file |
+| `-o, --org <organizations...>` | Organizations to monitor |
+| `-i, --interval <seconds>` | Refresh interval in seconds (default: 5) |
+| `-s, --status <statuses...>` | Filter by status (queued, in_progress, completed) |
+| `-p, --show-prs` | Show open pull requests in header |
+| `-d, --show-docker` | Show Docker Compose service status in header |
+| `--bk-org <org>` | Buildkite organization slug |
+| `--pipeline <slugs...>` | Buildkite pipeline slugs to watch |
+| `--no-buildkite` | Disable the Buildkite provider |
+| `--no-github` | Disable GitHub Actions runs (PRs are governed by `--show-prs`) |
 
 ## Keyboard Shortcuts
 
@@ -167,15 +277,17 @@ Create a `.gh-hud.json` file in your home directory or project root:
 | `↓` / `j` | Move selection down |
 | `←` / `h` | Move selection left |
 | `→` / `l` | Move selection right |
-| `Enter` | Open selected workflow in browser |
+| `Enter` | Open selected run in browser |
 | `?` | Show help |
 | `q` / `Ctrl+C` | Quit |
 
-### Workflow Management
+### Run Management
 | Key | Action |
 |-----|--------|
-| `d` | Dismiss completed workflow |
-| `D` | Dismiss ALL completed workflows |
+| `d` | Dismiss completed run |
+| `D` | Dismiss ALL completed runs |
+| `k` | Kill/cancel running run |
+| `U` | Resurrect older run (undo dismiss) |
 | `r` | Force refresh |
 
 ### Event Log
@@ -189,13 +301,13 @@ Create a `.gh-hud.json` file in your home directory or project root:
 
 ## Status Indicators
 
-### Workflow Status
-- 🟡 **Yellow (●)**: Workflow is running
-- 🟢 **Green (✓)**: Workflow completed successfully
-- 🔴 **Red (✗)**: Workflow failed
-- ⚪ **Gray (○)**: Workflow is queued
-- ⚪ **Gray (⊘)**: Workflow was cancelled
-- ⚪ **Gray (⊜)**: Workflow was skipped
+### Run Status
+- 🟡 **Yellow (●)**: Run is running
+- 🟢 **Green (✓)**: Run completed successfully
+- 🔴 **Red (✗)**: Run failed
+- ⚪ **Gray (○)**: Run is queued
+- ⚪ **Gray (⊘)**: Run was cancelled
+- ⚪ **Gray (⊜)**: Run was skipped
 
 ### Docker Service Status
 - 🟢 **Green (✓)**: Service is running and healthy
@@ -210,11 +322,26 @@ Create a `.gh-hud.json` file in your home directory or project root:
 
 The built-in event log helps you track what's happening in your repositories:
 
-- **INFO Level**: Shows important events like workflow status changes
+- **INFO Level**: Shows important events like run status changes
 - **DEBUG Level**: Includes refresh notifications and system messages
 - **TRACE Level**: Shows all messages including detailed state updates
 
 Press `F9` to toggle the event log, and `F10` to cycle through log levels. The log automatically filters messages based on your selected level. Your preferences (height, auto-show, log level) are saved between sessions.
+
+## Diagnostics: when the dashboard looks empty or wrong
+
+An empty grid isn't silent: it shows a diagnostic for each configured
+provider that contributed nothing, right in the empty-state panel — for
+example, a Buildkite token that doesn't reach any organization, or a
+repository that has no matching Buildkite pipeline. Error-level diagnostics
+are shown in red; informational ones (like "no Buildkite token configured")
+in white.
+
+If one provider is failing while the other still has runs on screen — say
+Buildkite's token was just revoked while GitHub Actions runs keep rendering
+fine — the failure doesn't just scroll away into the event log. The status
+bar holds a red `⚠` warning summarizing the most recent error-level
+diagnostic until a refresh resolves it.
 
 ## Docker Monitoring
 
@@ -247,16 +374,15 @@ bun run format
 ## Project Structure
 
 ```
-gh-hud/
+ops-hud/
 ├── src/
 │   ├── index.ts       # CLI entry point
-│   ├── app.ts         # Main application logic
-│   ├── dashboard.ts   # Terminal UI components
-│   ├── github.ts      # GitHub API service
-│   ├── config.ts      # Configuration management
-│   └── types.ts       # TypeScript type definitions
-├── bin/
-│   └── gh-hud.js      # Executable script
+│   ├── cli.ts          # Commander program and flag definitions
+│   ├── app.ts          # Main application logic
+│   ├── dashboard.ts    # Terminal UI components
+│   ├── config.ts       # Configuration management
+│   ├── providers/       # GitHub Actions and Buildkite providers
+│   └── types.ts         # TypeScript type definitions
 ├── package.json
 ├── tsconfig.json
 ├── biome.json
@@ -265,17 +391,38 @@ gh-hud/
 
 ## Troubleshooting
 
-### No workflows appearing
+### No runs appearing
 
 1. Ensure `gh` is authenticated: `gh auth status`
 2. Check repository access: `gh repo list`
 3. Verify workflows exist: `gh run list --repo owner/repo`
+4. For Buildkite, check the empty-state panel and the status bar for a
+   diagnostic explaining why — a missing/rejected token or an unmatched
+   pipeline both show up there.
 
 ### Performance issues
 
 - Reduce the number of monitored repositories
 - Increase the refresh interval
 - Use `filterStatus` to only show active workflows
+
+## Upgrading from gh-hud
+
+ops-hud is the renamed, Buildkite-aware successor to gh-hud (2.0.0). If
+you're upgrading:
+
+- The binary is now `ops-hud`, not `gh-hud`. Reinstall with
+  `npm install -g ops-hud` (and `npm uninstall -g gh-hud` when you're done
+  with the old one).
+- Config files: `.ops-hud.json` (project directory, home directory, or
+  `~/.config/ops-hud/config.json`) are checked first; if none of those exist,
+  ops-hud still reads a pre-existing `.gh-hud.json` in the same three
+  locations. Nothing is deleted or migrated automatically — copy your old
+  config to the new filename whenever it's convenient.
+- Saved preferences (event log height, auto-show, log level) are read from
+  `~/.gh-hud-prefs.json` if `~/.ops-hud-prefs.json` doesn't exist yet. The
+  first time ops-hud saves preferences, it writes the new file; the old one
+  is left alone.
 
 ## Contributing
 
@@ -292,5 +439,5 @@ Michael Quinn
 ## Acknowledgments
 
 - Built with [blessed](https://github.com/chjj/blessed) for terminal UI
-- Uses GitHub CLI (`gh`) for API access
-- Inspired by `gh run watch` command
+- Uses GitHub CLI (`gh`) and the Buildkite REST API for CI data
+- Inspired by `gh run watch`

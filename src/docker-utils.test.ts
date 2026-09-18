@@ -6,7 +6,7 @@ import { DockerServiceManager } from "./docker-utils.js"
 
 describe("repository path discovery", () => {
   test("uses the scoped checkout instead of guessing at project roots", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "gh-hud-docker-"))
+    const dir = await mkdtemp(join(tmpdir(), "ops-hud-docker-"))
     const docker = new DockerServiceManager()
     docker.setScopeDir(dir)
 

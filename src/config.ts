@@ -71,10 +71,15 @@ const DEFAULT_CONFIG: Config = {
 export class ConfigManager {
   private config: Config = { ...DEFAULT_CONFIG }
 
-  async loadConfig(configPath?: string): Promise<Config> {
+  async loadConfig(configPath?: string, baseDir: string = process.cwd()): Promise<Config> {
     const paths = [
       configPath,
-      ".gh-hud.json",
+      join(baseDir, ".ops-hud.json"),
+      join(homedir(), ".ops-hud.json"),
+      join(homedir(), ".config", "ops-hud", "config.json"),
+      // Legacy gh-hud locations, kept so the 2.0 rename doesn't silently drop
+      // an existing user's configuration.
+      join(baseDir, ".gh-hud.json"),
       join(homedir(), ".gh-hud.json"),
       join(homedir(), ".config", "gh-hud", "config.json"),
     ].filter(Boolean) as string[]

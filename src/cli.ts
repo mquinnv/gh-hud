@@ -115,11 +115,11 @@ export function buildProgram(): Command {
   const program = new Command()
 
   program
-    .name("gh-hud")
-    .description("GitHub workflow monitoring dashboard for terminal")
+    .name("ops-hud")
+    .description("CI and ops dashboard for the terminal — GitHub Actions and Buildkite")
     .version(packageJson.version)
 
-  addWatchOptions(program.command("watch").description("Watch GitHub workflows")).action(watch)
+  addWatchOptions(program.command("watch").description("Watch CI runs")).action(watch)
 
   // Default command (same as watch)
   addWatchOptions(program).action(watch)

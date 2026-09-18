@@ -4,7 +4,7 @@ import runsFixture from "../fixtures/github-runs.json"
 import { type CommandRunner, GitHubProvider } from "./github.js"
 import type { Scope } from "./types.js"
 
-const scope: Scope = { repositories: ["mquinnv/gh-hud"], organizations: [] }
+const scope: Scope = { repositories: ["acme/widgets"], organizations: [] }
 
 type Call = { file: string; args: string[]; options?: { timeout?: number } }
 
@@ -41,7 +41,7 @@ describe("GitHubProvider.fetchRuns", () => {
 
     expect(calls[0].file).toBe("gh")
     expect(calls[0].args[0]).toBe("api")
-    expect(calls[0].args[1]).toContain("repos/mquinnv/gh-hud/actions/runs")
+    expect(calls[0].args[1]).toContain("repos/acme/widgets/actions/runs")
   })
 
   // A rate limit is a different problem from a broken repository, and the log
@@ -61,7 +61,7 @@ describe("GitHubProvider.fetchRuns", () => {
     const { diagnostics } = await provider.fetchRuns(scope)
 
     expect(diagnostics).toHaveLength(1)
-    expect(diagnostics[0].message).toBe("GitHub: could not list runs for mquinnv/gh-hud")
+    expect(diagnostics[0].message).toBe("GitHub: could not list runs for acme/widgets")
     expect(diagnostics[0].level).toBe("error")
   })
 
@@ -136,7 +136,7 @@ describe("GitHubProvider.fetchOlderRuns", () => {
     const provider = new GitHubProvider(failingRunner("exit code 1"))
     const { diagnostics } = await provider.fetchOlderRuns(scope, "2026-09-01T00:00:00Z", 1)
 
-    expect(diagnostics[0].message).toBe("GitHub: could not list older runs for mquinnv/gh-hud")
+    expect(diagnostics[0].message).toBe("GitHub: could not list older runs for acme/widgets")
   })
 })
 

@@ -78,7 +78,7 @@ export class Dashboard {
 
     this.screen = blessed.screen({
       smartCSR: true,
-      title: "GitHub Workflow Monitor",
+      title: "Ops HUD",
       fullUnicode: true,
       warnings: false,
       keys: true,
@@ -1037,7 +1037,7 @@ export class Dashboard {
       width: "50%",
       height: "50%",
       content: `
-{center}{bold}GitHub Workflow Monitor - Help{/bold}{/center}
+{center}{bold}Ops HUD - Help{/bold}{/center}
 
 {bold}Navigation:{/bold}
   Tab        - Switch between PRs and workflows
@@ -1050,11 +1050,11 @@ export class Dashboard {
 
 {bold}Actions:{/bold}
   r       - Force refresh
-  d       - Dismiss completed workflow
-  D       - Dismiss ALL completed workflows
-  k       - Kill/cancel running workflow
+  d       - Dismiss completed run
+  D       - Dismiss ALL completed runs
+  k       - Kill/cancel running run
   j       - Expand/collapse job steps (completed jobs are collapsed by default)
-  U       - Resurrect older workflow (undo dismiss)
+  U       - Resurrect older run (undo dismiss)
   ?       - Show this help
   q/Ctrl+C - Quit
 
@@ -1290,7 +1290,7 @@ Press '?', '/', or 'Esc' to close...`,
   private showInitialState(): void {
     // Just show the status bar with loading message - no intrusive dialog
     this.statusBox.setContent("{center}Loading workflows... Press 'q' to quit{/center}")
-    this.log("GitHub HUD started", "info")
+    this.log("Ops HUD started", "info")
 
     // Log any pending preference messages
     if (this.pendingPrefsLog.length > 0) {
@@ -2890,13 +2890,18 @@ Press '?', '/', or 'Esc' to close...`,
 
   private loadPreferences(): void {
     try {
-      const prefsPath = path.join(os.homedir(), ".gh-hud-prefs.json")
+      const prefsPath = path.join(os.homedir(), ".ops-hud-prefs.json")
+      // Fall back to the pre-rename prefs file so an upgrading user's saved
+      // layout survives; savePreferences() always writes the new path, so
+      // this fallback is only ever read, never written.
+      const legacyPrefsPath = path.join(os.homedir(), ".gh-hud-prefs.json")
+      const readPath = fs.existsSync(prefsPath) ? prefsPath : legacyPrefsPath
 
       // Store preference info for logging after UI is ready
-      this.pendingPrefsLog = [`Preferences file: ${prefsPath}`]
+      this.pendingPrefsLog = [`Preferences file: ${readPath}`]
 
-      if (fs.existsSync(prefsPath)) {
-        const content = fs.readFileSync(prefsPath, "utf8")
+      if (fs.existsSync(readPath)) {
+        const content = fs.readFileSync(readPath, "utf8")
         if (content) {
           const prefs = JSON.parse(content)
           this.pendingPrefsLog.push(`Loaded preferences: ${JSON.stringify(prefs)}`)
@@ -2944,7 +2949,9 @@ Press '?', '/', or 'Esc' to close...`,
 
   private savePreferences(): void {
     try {
-      const prefsPath = path.join(os.homedir(), ".gh-hud-prefs.json")
+      // Always the new path — loadPreferences() reads the legacy one only
+      // as a fallback, so the first save migrates the user off it.
+      const prefsPath = path.join(os.homedir(), ".ops-hud-prefs.json")
 
       const prefs = {
         debugBoxHeight: this.debugBoxHeight,

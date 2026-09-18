@@ -1,11 +1,11 @@
 {
-  "name": "gh-hud",
-  "version": "1.3.0",
-  "description": "GitHub workflow monitoring dashboard for terminal",
+  "name": "ops-hud",
+  "version": "2.0.0",
+  "description": "CI and ops dashboard for the terminal — GitHub Actions and Buildkite",
   "main": "dist/index.js",
   "type": "module",
   "bin": {
-    "gh-hud": "./dist/index.js"
+    "ops-hud": "./dist/index.js"
   },
   "files": [
     "dist",
@@ -14,12 +14,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mquinnv/gh-hud.git"
+    "url": "git+https://github.com/mquinnv/ops-hud.git"
   },
   "bugs": {
-    "url": "https://github.com/mquinnv/gh-hud/issues"
+    "url": "https://github.com/mquinnv/ops-hud/issues"
   },
-  "homepage": "https://github.com/mquinnv/gh-hud#readme",
+  "homepage": "https://github.com/mquinnv/ops-hud#readme",
   "engines": {
     "node": ">=18.0.0"
   },
@@ -31,7 +31,7 @@
     "check": "bun biome check .",
     "format": "bun biome format --write .",
     "test": "bun test",
-    "gh-hud": "bun dist/index.js",
+    "ops-hud": "bun dist/index.js",
     "prepublishOnly": "bun run build && bun run check && bun test"
   },
   "keywords": [
@@ -40,7 +40,9 @@
     "monitoring",
     "cli",
     "terminal",
-    "dashboard"
+    "dashboard",
+    "buildkite",
+    "ci"
   ],
   "author": "Michael Quinn",
   "license": "MIT",

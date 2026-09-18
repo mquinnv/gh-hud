@@ -5,10 +5,10 @@ import { tmpdir } from "os"
 import { join } from "path"
 import type { Job, Run, Step } from "./types.js"
 
-// The Dashboard reads and writes ~/.gh-hud-prefs.json on construction and on
+// The Dashboard reads and writes ~/.ops-hud-prefs.json on construction and on
 // destroy. Point HOME somewhere disposable before it is ever imported.
 const originalHome = process.env.HOME
-process.env.HOME = mkdtempSync(join(tmpdir(), "gh-hud-dashboard-test-"))
+process.env.HOME = mkdtempSync(join(tmpdir(), "ops-hud-dashboard-test-"))
 
 const { Dashboard } = await import("./dashboard.js")
 
