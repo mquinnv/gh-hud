@@ -4,6 +4,7 @@ import * as fs from "fs"
 import * as os from "os"
 import * as path from "path"
 import type { ProviderDiagnostic } from "./providers/types.js"
+import { rerunVerb, runNoun } from "./run-wording.js"
 import { isActive, isTerminal, statusColor, statusIcon } from "./status.js"
 import type { DockerServiceStatus, Job, PullRequest, Run } from "./types.js"
 
@@ -1158,6 +1159,8 @@ Press '?', '/', or 'Esc' to close...`,
     }
 
     const projectName = run.repo.fullName
+    const noun = runNoun(run)
+    const titleNoun = noun.replace(/\b\w/g, (c) => c.toUpperCase())
 
     this.confirmBox = blessed.box({
       parent: this.screen,
@@ -1165,10 +1168,10 @@ Press '?', '/', or 'Esc' to close...`,
       left: "center",
       width: 60,
       height: 10,
-      content: `{center}{bold}{red-fg}Cancel Workflow?{/red-fg}{/bold}{/center}
+      content: `{center}{bold}{red-fg}Cancel ${titleNoun}?{/red-fg}{/bold}{/center}
 
 {center}${projectName}{/center}
-{center}${run.pipeline || "Workflow"} Run #${run.number}{/center}
+{center}${run.pipeline || titleNoun} ${noun} #${run.number}{/center}
 {center}Branch: ${run.branch}{/center}
 
 {center}{bold}Press 'y' to confirm, 'n' or ESC to cancel{/bold}{/center}`,
@@ -2148,7 +2151,7 @@ Press '?', '/', or 'Esc' to close...`,
         if (isActive(workflow.status)) {
           shortcuts.push("k: cancel")
         } else {
-          shortcuts.push("r: re-run", "d: dismiss")
+          shortcuts.push(`r: ${rerunVerb(workflow)}`, "d: dismiss")
         }
 
         shortcuts.push("l: logs")

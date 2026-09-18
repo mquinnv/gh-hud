@@ -86,9 +86,18 @@ class PagingProvider extends FakeProvider {
   }
 }
 
+/** The action callbacks App.setupEventHandlers() registers on the dashboard,
+ *  captured so tests can fire them directly without a real terminal. */
+interface CapturedHandlers {
+  kill?: (run: Run) => void | Promise<void>
+  rerun?: (run: Run) => void | Promise<void>
+  logs?: (run: Run) => void | Promise<void>
+}
+
 function makeDashboard() {
   const rendered: Array<{ runs: Run[]; jobs: Map<string, Job[]> }> = []
   const logs: string[] = []
+  const handlers: CapturedHandlers = {}
 
   const dashboard = {
     isModalOpen: () => false,
@@ -106,7 +115,9 @@ function makeDashboard() {
     },
     destroy() {},
     // No-op event registrations — App.initialize() wires all of these up via
-    // setupEventHandlers(), but nothing in these tests fires a dashboard event.
+    // setupEventHandlers(), but nothing in these tests fires a dashboard event,
+    // except onKillRun/onRunRerun/onRunLogs, whose callbacks are captured
+    // above for the provider-wording tests to invoke directly.
     onRefresh() {},
     onExit() {},
     onOpenRun() {},
@@ -114,16 +125,22 @@ function makeDashboard() {
     onDismissRun() {},
     onDismissAllCompleted() {},
     onResurrectRun() {},
-    onKillRun() {},
+    onKillRun(cb: (run: Run) => void | Promise<void>) {
+      handlers.kill = cb
+    },
     onDockerAction() {},
     onPRMerge() {},
     onPRCheckout() {},
     onPRAction() {},
-    onRunRerun() {},
-    onRunLogs() {},
+    onRunRerun(cb: (run: Run) => void | Promise<void>) {
+      handlers.rerun = cb
+    },
+    onRunLogs(cb: (run: Run) => void | Promise<void>) {
+      handlers.logs = cb
+    },
   }
 
-  return { dashboard: dashboard as unknown as Dashboard, rendered, logs }
+  return { dashboard: dashboard as unknown as Dashboard, rendered, logs, handlers }
 }
 
 interface AppInternals {
@@ -135,6 +152,7 @@ interface AppInternals {
   performRefresh(isManual?: boolean): Promise<void>
   dismissRun(key: string): void
   dismissAllCompletedRuns(runs: Run[]): void
+  setupEventHandlers(): void
   buildProviders(args: {
     noGithub?: boolean
     noBuildkite?: boolean
@@ -144,11 +162,11 @@ interface AppInternals {
 }
 
 function makeApp(providers: CiProvider[]) {
-  const { dashboard, rendered, logs } = makeDashboard()
+  const { dashboard, rendered, logs, handlers } = makeDashboard()
   const app = new App({ providers, dashboard })
   const internals = app as unknown as AppInternals
   internals.repositories = ["acme/widgets"]
-  return { app, internals, rendered, logs }
+  return { app, internals, rendered, logs, handlers }
 }
 
 const visibleKeys = (rendered: Array<{ runs: Run[] }>): string[] =>
@@ -331,6 +349,60 @@ describe("multiple providers", () => {
     await internals.performRefresh()
 
     expect(logs).toContain("GitHub: API rate limit exceeded")
+  })
+})
+
+// Ops-hud Task 8 (Ruling 31): the action log lines the kill/rerun handlers
+// emit must use the wording the run's own provider uses — "workflow run" and
+// "rerun" for GitHub, "build" and "rebuild" for Buildkite — never one
+// hard-coded term for both. Routing to the right provider is already covered
+// above ("each run's actions go to the provider that reported it"); these
+// tests cover the wording those handlers log once routed.
+describe("provider-accurate action wording", () => {
+  test("cancelling a Buildkite run logs 'build', not 'workflow run'", async () => {
+    const run = makeRun({ provider: "buildkite" })
+    const provider = new FakeProvider("buildkite", [run])
+    const { internals, logs, handlers } = makeApp([provider])
+    internals.setupEventHandlers()
+
+    await handlers.kill?.(run)
+
+    expect(logs.some((line) => line.includes("build"))).toBe(true)
+    expect(logs.some((line) => line.includes("workflow run"))).toBe(false)
+  })
+
+  test("cancelling a GitHub run logs 'workflow run'", async () => {
+    const run = makeRun({ provider: "github" })
+    const provider = new FakeProvider("github", [run])
+    const { internals, logs, handlers } = makeApp([provider])
+    internals.setupEventHandlers()
+
+    await handlers.kill?.(run)
+
+    expect(logs.some((line) => line.includes("workflow run"))).toBe(true)
+  })
+
+  test("rerunning a Buildkite run logs 'rebuild', not 'rerun'", async () => {
+    const run = makeRun({ provider: "buildkite" })
+    const provider = new FakeProvider("buildkite", [run])
+    const { internals, logs, handlers } = makeApp([provider])
+    internals.setupEventHandlers()
+
+    await handlers.rerun?.(run)
+
+    expect(logs.some((line) => line.includes("rebuild"))).toBe(true)
+    expect(logs.some((line) => line.includes("rerun"))).toBe(false)
+  })
+
+  test("rerunning a GitHub run logs 'rerun'", async () => {
+    const run = makeRun({ provider: "github" })
+    const provider = new FakeProvider("github", [run])
+    const { internals, logs, handlers } = makeApp([provider])
+    internals.setupEventHandlers()
+
+    await handlers.rerun?.(run)
+
+    expect(logs.some((line) => line.includes("rerun"))).toBe(true)
   })
 })
 

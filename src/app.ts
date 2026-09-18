@@ -11,6 +11,7 @@ import {
 import { GitHubProvider } from "./providers/github.js"
 import { applyIsFailing } from "./providers/github-map.js"
 import type { CiProvider, ProviderDiagnostic, Scope } from "./providers/types.js"
+import { rerunVerb, runNoun } from "./run-wording.js"
 import { isActive } from "./status.js"
 import type { DockerServiceStatus, Job, PullRequest, Run } from "./types.js"
 
@@ -240,15 +241,16 @@ export class App {
         return
       }
 
+      const noun = runNoun(run)
       try {
-        this.dashboard.log(`Cancelling run ${run.id} in ${run.repo.fullName}...`, "info")
+        this.dashboard.log(`Cancelling ${noun} ${run.id} in ${run.repo.fullName}...`, "info")
         await provider.cancel(run)
 
-        this.dashboard.log(`Successfully cancelled run ${run.id}`, "info")
+        this.dashboard.log(`Successfully cancelled ${noun} ${run.id}`, "info")
         // Force refresh to update the status
         await this.performRefresh(true)
       } catch (error) {
-        this.dashboard.log(`Failed to cancel run: ${error}`, "error")
+        this.dashboard.log(`Failed to cancel ${noun}: ${error}`, "error")
       }
     })
 
@@ -426,14 +428,15 @@ export class App {
         return
       }
 
+      const verb = rerunVerb(run)
       try {
-        this.dashboard.log(`Re-running run ${run.id} in ${run.repo.fullName}...`, "info")
+        this.dashboard.log(`Triggering a ${verb} of ${run.id} in ${run.repo.fullName}...`, "info")
         await provider.rerun(run)
 
-        this.dashboard.log(`Successfully triggered rerun of run ${run.id}`, "info")
+        this.dashboard.log(`Successfully triggered a ${verb} of ${run.id}`, "info")
         await this.performRefresh(true)
       } catch (error) {
-        this.dashboard.log(`Failed to rerun run: ${error}`, "error")
+        this.dashboard.log(`Failed to trigger a ${verb}: ${error}`, "error")
       }
     })
 
@@ -445,8 +448,9 @@ export class App {
         return
       }
 
+      const noun = runNoun(run)
       try {
-        this.dashboard.log(`Fetching logs for run ${run.id}...`, "info")
+        this.dashboard.log(`Fetching logs for ${noun} ${run.id}...`, "info")
         const output = await provider.logs(run)
 
         // Show first 20 lines of logs in the dashboard
@@ -457,12 +461,12 @@ export class App {
 
         if (logLines.length > 20) {
           this.dashboard.log(
-            `... (truncated, ${logLines.length} lines total; open the run for full logs)`,
+            `... (truncated, ${logLines.length} lines total; open the ${noun} for full logs)`,
             "info",
           )
         }
       } catch (error) {
-        this.dashboard.log(`Failed to fetch run logs: ${error}`, "error")
+        this.dashboard.log(`Failed to fetch logs for ${noun}: ${error}`, "error")
       }
     })
   }

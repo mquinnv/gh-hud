@@ -310,3 +310,54 @@ describe("status-bar error diagnostics", () => {
     dashboard.updateWorkflows([], new Map(), undefined, undefined, [])
   })
 })
+
+// Provider-accurate wording (ops-hud Task 8): GitHub Actions calls a run a
+// "workflow run" and re-triggering it a "rerun"; Buildkite calls the same
+// things a "build" and a "rebuild". The UI must say whichever the run's own
+// provider uses, never one hard-coded term for both.
+describe("provider-accurate wording", () => {
+  const showKillConfirmation = (run: Run): string => {
+    ;(dashboard as unknown as { showKillConfirmation(run: Run): void }).showKillConfirmation(run)
+    const content = (
+      dashboard as unknown as { confirmBox: { getContent(): string } }
+    ).confirmBox.getContent()
+    // Close it again so it doesn't block the next test — updateWorkflows()
+    // is a no-op while a modal is open.
+    ;(dashboard as unknown as { hideKillConfirmation(): void }).hideKillConfirmation()
+    return content
+  }
+
+  test("a Buildkite run's kill confirmation says 'build', not 'workflow run'", () => {
+    const run = makeRun({ provider: "buildkite" })
+    const content = showKillConfirmation(run)
+    expect(content).toContain("build")
+    expect(content).not.toContain("workflow run")
+  })
+
+  test("a GitHub run's kill confirmation says 'workflow run'", () => {
+    const run = makeRun({ provider: "github" })
+    const content = showKillConfirmation(run)
+    expect(content).toContain("workflow run")
+  })
+
+  const shortcutsFor = (run: Run): string[] => {
+    dashboard.updateWorkflows([run], new Map())
+    return (dashboard as unknown as { getContextualShortcuts(): string[] }).getContextualShortcuts()
+  }
+
+  test("a finished Buildkite run offers 'rebuild', not 'rerun'", () => {
+    const run = makeRun({ provider: "buildkite", status: "passed" })
+    const shortcuts = shortcutsFor(run)
+    expect(shortcuts).toContain("r: rebuild")
+    expect(shortcuts.some((s) => s.includes("rerun"))).toBe(false)
+  })
+
+  test("a finished GitHub run offers 'rerun'", () => {
+    const run = makeRun({ provider: "github", status: "passed" })
+    const shortcuts = shortcutsFor(run)
+    expect(shortcuts).toContain("r: rerun")
+
+    // Leave the shared dashboard back in its empty starting state.
+    dashboard.updateWorkflows([], new Map(), undefined, undefined, [])
+  })
+})
