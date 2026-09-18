@@ -94,6 +94,12 @@ This is what makes ops-hud useful as a per-project pane in a tmux split. If the
 path isn't a directory, or has no `github.com` remote, ops-hud exits with an
 error rather than starting an empty dashboard.
 
+Buildkite pipelines for the scoped checkout are derived from its repository —
+unless a `buildkite.pipelines` list is set. A non-empty list in a *global*
+`~/.ops-hud.json` overrides that derivation for **every** checkout, so each
+per-project pane would show the same listed pipelines. Put such a list in a
+project's own `.ops-hud.json`, or pass `--pipeline` for that one run, instead.
+
 ### Monitor Organization Repositories
 
 ```bash

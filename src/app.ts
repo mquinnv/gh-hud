@@ -70,6 +70,8 @@ export class App {
   // "no token — skipped" is logged once rather than every 5s, where it would
   // push real events out of the log buffer.
   private previousDiagnosticMessages: Set<string> = new Set()
+  // Set by --no-buildkite, so an empty grid says why there are no builds.
+  private buildkiteDisabled = false
 
   constructor(deps: AppDependencies = {}) {
     this.github = deps.github ?? new GitHubProvider()
@@ -97,8 +99,15 @@ export class App {
     bkOrg?: string
     pipelines?: string[]
   }): Promise<void> {
-    // Load configuration
+    // Load configuration, and say which file it came from: a legacy
+    // ./.gh-hud.json silently shadowed by a newer ~/.ops-hud.json (or the
+    // reverse) is otherwise invisible.
     await this.configManager.loadConfig(args.config)
+    const loadedPath = this.configManager.loadedPath
+    this.dashboard.log(
+      loadedPath ? `Config: loaded ${loadedPath}` : "Config: no config file found, using defaults",
+      "info",
+    )
 
     // Config is only known once loadConfig has run, so the provider list
     // (which needs buildkite.token/org/pipelines) is built here, never in the
@@ -106,6 +115,7 @@ export class App {
     if (!this.providersInjected) {
       this.providers = this.buildProviders(args)
     }
+    this.buildkiteDisabled = args.noBuildkite === true
 
     // A path argument or -r is a hard scope, not an addition to whatever the
     // config file happens to list — otherwise configured orgs widen it back out.
@@ -485,7 +495,7 @@ export class App {
   }
 
   private currentScope(): Scope {
-    return { repositories: this.repositories, organizations: [] }
+    return { repositories: this.repositories }
   }
 
   private async performRefresh(_isManual: boolean = false): Promise<void> {
@@ -514,12 +524,20 @@ export class App {
           }
         }
       }
-      this.logChangedDiagnostics(results.flatMap((result) => result.diagnostics))
+      const diagnostics = results.flatMap((result) => result.diagnostics)
+      if (this.buildkiteDisabled) {
+        diagnostics.push({
+          provider: "buildkite",
+          level: "info",
+          message: "Buildkite: disabled (--no-buildkite)",
+        })
+      }
+      this.logChangedDiagnostics(diagnostics)
       allRuns.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
 
       // Kept for the empty-state panel: a Buildkite misconfiguration on a
       // checkout with no GitHub Actions runs must not look like idle CI.
-      this.lastDiagnostics = results.flatMap((result) => result.diagnostics)
+      this.lastDiagnostics = diagnostics
 
       // Fetch PRs if requested
       if (this.showPRs) {
@@ -561,10 +579,18 @@ export class App {
         }
       }
 
-      // Track the oldest workflow timestamp for resurrect feature
-      if (allRuns.length > 0) {
-        const oldestRun = allRuns[allRuns.length - 1]
-        this.oldestWorkflowTimestamp = oldestRun.createdAt
+      // Track the oldest timestamp for resurrect, from the providers that can
+      // page backwards only: an old Buildkite build in the merged list would
+      // otherwise make resurrect ask GitHub for runs older than that, and
+      // skip every GitHub run in between.
+      const pagingRuns = results
+        .filter((_, index) => this.providers[index]?.fetchOlderRuns !== undefined)
+        .flatMap((result) => result.runs)
+      if (pagingRuns.length > 0) {
+        const oldest = pagingRuns.reduce((a, b) =>
+          new Date(b.createdAt).getTime() < new Date(a.createdAt).getTime() ? b : a,
+        )
+        this.oldestWorkflowTimestamp = oldest.createdAt
       }
 
       // A dismissed blocked run whose status has moved on is no longer dismissed.
@@ -578,9 +604,11 @@ export class App {
       // Visible runs = active runs + finished ones pending confirmation, excluding dismissed
       const visibleRuns = allRuns.filter((run) => this.isVisible(run))
 
-      // Fetch jobs for active runs, unless the provider already handed them over
+      // Jobs a provider handed over with its runs (Buildkite) are kept for
+      // every visible run, finished ones included — they cost nothing. Only
+      // active runs are worth a separate fetch.
       const jobPromises = visibleRuns
-        .filter((run) => isActive(run.status))
+        .filter((run) => providerJobs.has(run.key) || isActive(run.status))
         .map(async (run) => {
           const embedded = providerJobs.get(run.key)
           if (embedded) return { key: run.key, jobs: embedded }

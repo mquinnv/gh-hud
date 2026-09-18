@@ -3,8 +3,6 @@ import type { Job, Run } from "../types.js"
 export interface Scope {
   /** "owner/repo" entries. */
   repositories: string[]
-  /** GitHub organizations to expand into repositories. */
-  organizations: string[]
 }
 
 /** Why a provider contributed nothing, for the log pane and empty state. */

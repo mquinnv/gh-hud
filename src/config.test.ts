@@ -162,3 +162,13 @@ describe("retired config keys", () => {
     expect("filterStatus" in manager.getConfig()).toBe(false)
   })
 })
+
+describe("loaded config path", () => {
+  test("records which file was loaded, so a shadowed legacy file is visible", async () => {
+    const base = await mkdtemp(join(tmpdir(), "ops-hud-"))
+    await writeFile(join(base, ".gh-hud.json"), JSON.stringify({ maxWorkflows: 7 }))
+    const manager = new ConfigManager()
+    await manager.loadConfig(undefined, base, await freshHome())
+    expect(manager.loadedPath).toBe(join(base, ".gh-hud.json"))
+  })
+})

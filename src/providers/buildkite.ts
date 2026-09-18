@@ -81,14 +81,19 @@ export function nextLink(header: string | null): string | undefined {
   return undefined
 }
 
+/** Which token scope a request needs, so a 401/403 can name the missing one. */
+type TokenScope = "read" | "write" | "logs"
+
+const SCOPES_NEEDED: Record<TokenScope, string> = {
+  read: "read_builds, read_pipelines",
+  write: "write_builds",
+  logs: "read_build_logs",
+}
+
 /** A token that is present but rejected by the API (401/403) — must be loud. */
 export class TokenRejected extends Error {
-  constructor(scope: "read" | "write" = "read") {
-    super(
-      scope === "write"
-        ? "token rejected — check scopes (needs write_builds)"
-        : "token rejected — check scopes (needs read_builds, read_pipelines)",
-    )
+  constructor(scope: TokenScope = "read") {
+    super(`token rejected — check scopes (needs ${SCOPES_NEEDED[scope]})`)
   }
 }
 
@@ -360,7 +365,8 @@ export class BuildkiteProvider implements CiProvider {
     const job = pickLogJob(build.jobs ?? [])
     if (!job?.log_url) return ""
 
-    const response = await this.request(job.log_url)
+    // Log text needs its own scope; a 403 here must say so, not blame read_builds.
+    const response = await this.request(job.log_url, undefined, "logs")
     const payload = (await response.json()) as { content?: string }
     return payload.content ?? ""
   }
@@ -448,7 +454,7 @@ export class BuildkiteProvider implements CiProvider {
   private async request(
     url: string,
     init?: RequestInit,
-    tokenScope: "read" | "write" = "read",
+    tokenScope: TokenScope = "read",
   ): Promise<Response> {
     if (!url.startsWith(API_ORIGIN)) {
       throw new Error(`refusing to send the token to an unexpected host: ${url}`)

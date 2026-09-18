@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtempSync } from "fs"
+import { mkdtempSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { App } from "./app.js"
@@ -7,7 +7,7 @@ import { ConfigManager } from "./config.js"
 import type { Dashboard } from "./dashboard.js"
 import { BuildkiteProvider, type BuildkiteProviderOptions } from "./providers/buildkite.js"
 import type { GitHubProvider } from "./providers/github.js"
-import type { CiProvider, FetchResult, Scope } from "./providers/types.js"
+import type { CiProvider, FetchResult, ProviderDiagnostic, Scope } from "./providers/types.js"
 import type { RunStatus } from "./status.js"
 import type { BuildkiteConfig, Job, Provider, Run } from "./types.js"
 
@@ -98,7 +98,11 @@ interface CapturedHandlers {
 }
 
 function makeDashboard() {
-  const rendered: Array<{ runs: Run[]; jobs: Map<string, Job[]> }> = []
+  const rendered: Array<{
+    runs: Run[]
+    jobs: Map<string, Job[]>
+    diagnostics?: ProviderDiagnostic[]
+  }> = []
   const logs: string[] = []
   const handlers: CapturedHandlers = {}
 
@@ -110,8 +114,14 @@ function makeDashboard() {
     log(message: string) {
       logs.push(message)
     },
-    updateWorkflows(runs: Run[], jobs: Map<string, Job[]>) {
-      rendered.push({ runs, jobs })
+    updateWorkflows(
+      runs: Run[],
+      jobs: Map<string, Job[]>,
+      _prs?: unknown,
+      _docker?: unknown,
+      diagnostics?: ProviderDiagnostic[],
+    ) {
+      rendered.push({ runs, jobs, diagnostics })
     },
     getCurrentWorkflows(): Run[] {
       return rendered.at(-1)?.runs ?? []
@@ -192,8 +202,8 @@ function bkBuild(state: string, jobs: Array<Record<string, unknown>>, id = "b1")
  * home — never the developer's cwd or `~/.ops-hud.json`.
  */
 class IsolatedConfigManager extends ConfigManager {
-  private readonly base = mkdtempSync(join(tmpdir(), "ops-hud-app-base-"))
-  private readonly home = mkdtempSync(join(tmpdir(), "ops-hud-app-home-"))
+  readonly base = mkdtempSync(join(tmpdir(), "ops-hud-app-base-"))
+  readonly home = mkdtempSync(join(tmpdir(), "ops-hud-app-home-"))
 
   override loadConfig(configPath?: string) {
     return super.loadConfig(configPath, this.base, this.home)
@@ -442,6 +452,23 @@ describe("multiple providers", () => {
     expect(rendered.at(-1)?.jobs.get(run.key)).toHaveLength(1)
   })
 
+  // M4: a finished Buildkite card must not say "Loading job details..." when
+  // the provider already returned its jobs with the build.
+  test("jobs a provider handed over are kept for a finished, still-visible run", async () => {
+    const run = makeRun({ provider: "buildkite", status: "running" })
+    const jobs = new Map([[run.key, [makeJob(run.key, "passed")]]])
+    const provider = new FakeProvider("buildkite", [run], jobs, true)
+    const { internals, rendered } = makeApp([provider])
+
+    await internals.performRefresh()
+    provider.setRuns([{ ...run, status: "passed" }])
+    await internals.performRefresh()
+
+    expect(visibleKeys(rendered)).toEqual([run.key])
+    expect(rendered.at(-1)?.jobs.get(run.key)).toHaveLength(1)
+    expect(provider.fetchJobsFor).toEqual([])
+  })
+
   test("each run's actions go to the provider that reported it", async () => {
     const mine = makeRun({ provider: "github", id: "1" })
     const theirs = makeRun({ provider: "buildkite", id: "2" })
@@ -592,13 +619,30 @@ describe("resurrect", () => {
   })
 
   test("a provider that cannot page backwards simply sits it out", async () => {
-    const provider = new FakeProvider("github", [makeRun({ status: "running" })])
-    const { app, internals, logs } = makeApp([provider])
+    const paging = new PagingProvider("github", [makeRun({ status: "running" })])
+    const other = new FakeProvider("buildkite", [makeRun({ provider: "buildkite", id: "9" })])
+    const { app, internals, logs } = makeApp([paging, other])
 
     await internals.performRefresh()
     await app.resurrectOldestRun()
 
     expect(logs).toContain("No older workflows found")
+  })
+
+  // M5: an old Buildkite build in the merged list must not set the cursor
+  // GitHub is asked to page back from, or every GitHub run in between is skipped.
+  test("the resurrect cursor comes only from providers that can page backwards", async () => {
+    const github = new PagingProvider("github", [
+      makeRun({ id: "1", createdAt: "2026-09-17T10:00:00Z" }),
+    ])
+    const buildkite = new FakeProvider("buildkite", [
+      makeRun({ provider: "buildkite", id: "2", createdAt: "2020-01-01T00:00:00Z" }),
+    ])
+    const { internals } = makeApp([github, buildkite])
+
+    await internals.performRefresh()
+
+    expect(internals.oldestWorkflowTimestamp).toBe("2026-09-17T10:00:00Z")
   })
 
   test("an older run comes back as a finished, dismissible card", async () => {
@@ -795,6 +839,74 @@ describe("--no-github disables GitHub CI runs only (Ruling 26)", () => {
     // ...and so did PR fetching (governed by --show-prs, not --no-github).
     expect(getAllPullRequestsCalls).toBeGreaterThan(0)
 
+    app.stop()
+  })
+})
+
+describe("initialize() explains its setup", () => {
+  const originalToken = process.env.BUILDKITE_API_TOKEN
+  beforeEach(() => {
+    delete process.env.BUILDKITE_API_TOKEN
+  })
+  afterEach(() => {
+    if (originalToken === undefined) delete process.env.BUILDKITE_API_TOKEN
+    else process.env.BUILDKITE_API_TOKEN = originalToken
+  })
+
+  function makeInitApp(configManager: ConfigManager) {
+    const { dashboard, rendered, logs } = makeDashboard()
+    const fakeGithub = new FakeProvider("github") as unknown as GitHubProvider
+    const app = new App({
+      github: fakeGithub,
+      dashboard,
+      configManager,
+      buildkiteFactory: stubBuildkite,
+    })
+    return { app, rendered, logs }
+  }
+
+  // M2: an empty grid under --no-buildkite must say why there are no builds.
+  test("--no-buildkite adds a single info diagnostic saying so", async () => {
+    const { app, rendered } = makeInitApp(new IsolatedConfigManager())
+
+    await app.initialize({ repositories: ["acme/widgets"], noBuildkite: true })
+
+    const diagnostics = rendered.at(-1)?.diagnostics ?? []
+    expect(diagnostics).toEqual([
+      { provider: "buildkite", level: "info", message: "Buildkite: disabled (--no-buildkite)" },
+    ])
+    app.stop()
+  })
+
+  test("without --no-buildkite there is no such diagnostic", async () => {
+    const { app, rendered } = makeInitApp(new IsolatedConfigManager())
+
+    await app.initialize({ repositories: ["acme/widgets"] })
+
+    const messages = (rendered.at(-1)?.diagnostics ?? []).map((d) => d.message)
+    expect(messages).not.toContain("Buildkite: disabled (--no-buildkite)")
+    app.stop()
+  })
+
+  // M10: a legacy ./.gh-hud.json shadowed by a newer ~/.ops-hud.json must be visible.
+  test("the loaded config file is logged", async () => {
+    const configManager = new IsolatedConfigManager()
+    const path = join(configManager.home, ".ops-hud.json")
+    writeFileSync(path, JSON.stringify({ maxWorkflows: 5 }))
+    const { app, logs } = makeInitApp(configManager)
+
+    await app.initialize({ repositories: ["acme/widgets"] })
+
+    expect(logs).toContain(`Config: loaded ${path}`)
+    app.stop()
+  })
+
+  test("no config file is logged as such", async () => {
+    const { app, logs } = makeInitApp(new IsolatedConfigManager())
+
+    await app.initialize({ repositories: ["acme/widgets"] })
+
+    expect(logs).toContain("Config: no config file found, using defaults")
     app.stop()
   })
 })

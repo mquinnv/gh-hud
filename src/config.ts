@@ -77,6 +77,8 @@ const DEFAULT_CONFIG: Config = {
 
 export class ConfigManager {
   private config: Config = { ...DEFAULT_CONFIG }
+  /** The file `loadConfig` read, if any — so a shadowed legacy file is visible. */
+  loadedPath?: string
 
   /**
    * `homeDir` is a seam for the tests, which must never read the developer's
@@ -106,6 +108,7 @@ export class ConfigManager {
         // that still carry it keep loading; the key is simply dropped.
         const { filterStatus: _ignored, ...userConfig } = JSON.parse(content)
         this.config = { ...DEFAULT_CONFIG, ...userConfig }
+        this.loadedPath = path
         break
       } catch (_error) {
         // Config file doesn't exist or is invalid, continue to next

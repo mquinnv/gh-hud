@@ -3,7 +3,7 @@ import type { Run } from "../types.js"
 import { BuildkiteProvider, nextLink, resolveBuildkiteToken } from "./buildkite.js"
 import type { Scope } from "./types.js"
 
-const emptyScope: Scope = { repositories: [], organizations: [] }
+const emptyScope: Scope = { repositories: [] }
 
 function jsonResponse(body: unknown, init?: { status?: number; headers?: Record<string, string> }) {
   return new Response(JSON.stringify(body), {
@@ -236,9 +236,9 @@ describe("BuildkiteProvider pipeline index caching", () => {
       },
     })
 
-    await provider.fetchRuns({ repositories: ["inetalliance/usm"], organizations: [] })
+    await provider.fetchRuns({ repositories: ["inetalliance/usm"] })
     now += 60_000 // one minute later — still within the TTL
-    await provider.fetchRuns({ repositories: ["inetalliance/usm"], organizations: [] })
+    await provider.fetchRuns({ repositories: ["inetalliance/usm"] })
     expect(indexCalls).toBe(1)
   })
 
@@ -258,9 +258,9 @@ describe("BuildkiteProvider pipeline index caching", () => {
       },
     })
 
-    await provider.fetchRuns({ repositories: ["inetalliance/usm"], organizations: [] })
+    await provider.fetchRuns({ repositories: ["inetalliance/usm"] })
     now += 6 * 60_000 // six minutes later — past the TTL
-    await provider.fetchRuns({ repositories: ["inetalliance/usm"], organizations: [] })
+    await provider.fetchRuns({ repositories: ["inetalliance/usm"] })
     expect(indexCalls).toBe(2)
   })
 
@@ -280,9 +280,9 @@ describe("BuildkiteProvider pipeline index caching", () => {
       },
     })
 
-    await provider.fetchRuns({ repositories: ["inetalliance/usm"], organizations: [] })
+    await provider.fetchRuns({ repositories: ["inetalliance/usm"] })
     now += 16_000 // past the minimum fetch interval
-    await provider.fetchRuns({ repositories: ["inetalliance/usm"], organizations: [] })
+    await provider.fetchRuns({ repositories: ["inetalliance/usm"] })
     expect(indexCalls).toBe(2)
   })
 
@@ -310,7 +310,6 @@ describe("BuildkiteProvider pipeline index caching", () => {
 
     const result = await provider.fetchRuns({
       repositories: ["inetalliance/usm", "inetalliance/distributors"],
-      organizations: [],
     })
 
     expect(indexCalls).toBe(2)
@@ -338,7 +337,6 @@ describe("BuildkiteProvider.fetchRuns endpoint selection", () => {
 
     const result = await provider.fetchRuns({
       repositories: ["inetalliance/usm"],
-      organizations: [],
     })
 
     expect(result.runs).toHaveLength(1)
@@ -385,7 +383,6 @@ describe("BuildkiteProvider.fetchRuns endpoint selection", () => {
 
     const result = await provider.fetchRuns({
       repositories: ["inetalliance/no-such-repo"],
-      organizations: [],
     })
 
     expect(result.runs).toEqual([])
@@ -406,7 +403,7 @@ describe("BuildkiteProvider.fetchRuns endpoint selection", () => {
       },
     })
 
-    await provider.fetchRuns({ repositories: ["inetalliance/usm"], organizations: [] })
+    await provider.fetchRuns({ repositories: ["inetalliance/usm"] })
     await provider.fetchRuns(emptyScope)
 
     expect(requestedUrls.some((u) => u.includes("exclude_jobs"))).toBe(false)
@@ -456,7 +453,6 @@ describe("BuildkiteProvider.fetchRuns endpoint selection", () => {
 
     const result = await provider.fetchRuns({
       repositories: ["inetalliance/usm"],
-      organizations: [],
     })
     expect(result.runs).toHaveLength(1)
     expect(buildsCalls).toBe(1)
@@ -502,7 +498,6 @@ describe("BuildkiteProvider.fetchRuns pipeline selection modes", () => {
 
     const result = await provider.fetchRuns({
       repositories: ["inetalliance/usm"],
-      organizations: [],
     })
 
     expect(result.runs).toHaveLength(1)
@@ -530,7 +525,6 @@ describe("BuildkiteProvider.fetchRuns pipeline selection modes", () => {
 
     const result = await provider.fetchRuns({
       repositories: ["inetalliance/usm"],
-      organizations: [],
     })
 
     expect(result.runs).toHaveLength(1)
@@ -663,7 +657,6 @@ describe("BuildkiteProvider host restriction", () => {
 
     const result = await provider.fetchRuns({
       repositories: ["inetalliance/usm"],
-      organizations: [],
     })
     // The bad Link is caught and turned into a diagnostic, not sent to.
     expect(result.diagnostics.some((d) => d.message.includes("unexpected host"))).toBe(true)
@@ -782,6 +775,33 @@ describe("BuildkiteProvider.logs", () => {
     const content = await provider.logs(sampleRun())
     expect(content).toBe("failure output")
     expect(requestedLogUrl).toBe("https://api.buildkite.com/v2/log/failing")
+  })
+
+  // M1: log text needs read_build_logs; blaming read_builds sends the user
+  // to fix a scope they already have.
+  test("a 403 on a job's log_url names read_build_logs", async () => {
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      fetch: async (url: string) => {
+        if (url.includes("/log/")) return new Response("", { status: 403 })
+        return jsonResponse(
+          buildPayload("b1", 42, {
+            jobs: [
+              jobPayload({
+                id: "a",
+                state: "failed",
+                log_url: "https://api.buildkite.com/v2/log/a",
+              }),
+            ],
+          }),
+        )
+      },
+    })
+
+    const error = await provider.logs(sampleRun()).catch((e: Error) => e)
+    expect(String(error)).toContain("read_build_logs")
+    expect(String(error)).not.toContain("read_pipelines")
   })
 
   test("falls back to the last job with a log_url when nothing failed", async () => {

@@ -4,7 +4,7 @@ import runsFixture from "../fixtures/github-runs.json"
 import { type CommandRunner, GitHubProvider } from "./github.js"
 import type { Scope } from "./types.js"
 
-const scope: Scope = { repositories: ["acme/widgets"], organizations: [] }
+const scope: Scope = { repositories: ["acme/widgets"] }
 
 type Call = { file: string; args: string[]; options?: { timeout?: number } }
 
