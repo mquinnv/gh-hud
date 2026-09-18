@@ -5,7 +5,6 @@ export interface Scope {
   repositories: string[]
   /** GitHub organizations to expand into repositories. */
   organizations: string[]
-  buildkite?: { org: string; pipelines: string[] }
 }
 
 /** Why a provider contributed nothing, for the log pane and empty state. */

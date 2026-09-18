@@ -32,6 +32,43 @@ function sampleRun(overrides: Partial<Run> = {}): Run {
   }
 }
 
+const usmPipeline = {
+  id: "p1",
+  url: "x",
+  web_url: "x",
+  name: "site-content-usm",
+  slug: "site-content-usm",
+  repository: "git@github.com:inetalliance/usm.git",
+}
+
+const distributorsPipeline = {
+  id: "p2",
+  url: "x",
+  web_url: "x",
+  name: "site-content-usm-distributors",
+  slug: "site-content-usm-distributors",
+  repository: "git@github.com:inetalliance/distributors.git",
+}
+
+function buildPayload(id: string, number: number, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    number,
+    state: "passed",
+    commit: "deadbeef",
+    branch: "main",
+    web_url: "https://buildkite.com/x",
+    created_at: "2026-01-01T00:00:00Z",
+    pipeline: {
+      slug: "site-content-usm",
+      name: "site-content-usm",
+      repository: "git@github.com:inetalliance/usm.git",
+    },
+    jobs: [],
+    ...overrides,
+  }
+}
+
 describe("resolveBuildkiteToken", () => {
   test("prefers the environment variable over config", () => {
     expect(resolveBuildkiteToken({ BUILDKITE_API_TOKEN: "env" }, { token: "cfg" })).toBe("env")
@@ -96,10 +133,7 @@ describe("BuildkiteProvider with a failing token", () => {
       org: "acme",
       fetch: async () => new Response("", { status: 401 }),
     })
-    const result = await provider.fetchRuns({
-      ...emptyScope,
-      buildkite: { org: "acme", pipelines: [] },
-    })
+    const result = await provider.fetchRuns(emptyScope)
     expect(result.runs).toEqual([])
     expect(result.diagnostics[0].level).toBe("error")
     expect(result.diagnostics[0].message).toContain("rejected")
@@ -126,10 +160,12 @@ describe("BuildkiteProvider with a failing token", () => {
     expect(result.diagnostics[0].message).toContain("no organizations")
   })
 
-  test("auto-detects a sole organization", async () => {
+  test("auto-detects a sole organization and uses it in subsequent requests", async () => {
+    const requestedUrls: string[] = []
     const provider = new BuildkiteProvider({
       token: "good",
       fetch: async (url: string) => {
+        requestedUrls.push(url)
         if (url.endsWith("/organizations")) {
           return jsonResponse([{ slug: "ameriglide" }])
         }
@@ -138,39 +174,147 @@ describe("BuildkiteProvider with a failing token", () => {
     })
     const result = await provider.fetchRuns(emptyScope)
     expect(result.diagnostics.some((d) => d.level === "error")).toBe(false)
+    expect(requestedUrls.some((u) => u.includes("ameriglide"))).toBe(true)
+  })
+})
+
+describe("BuildkiteProvider org resolution caching", () => {
+  test("caches a resolved org — a second fetchRuns makes no /organizations call", async () => {
+    let orgCalls = 0
+    const provider = new BuildkiteProvider({
+      token: "good",
+      fetch: async (url: string) => {
+        if (url.endsWith("/organizations")) {
+          orgCalls++
+          return jsonResponse([{ slug: "ameriglide" }])
+        }
+        return jsonResponse([])
+      },
+    })
+
+    await provider.fetchRuns(emptyScope)
+    await provider.fetchRuns(emptyScope)
+    expect(orgCalls).toBe(1)
+  })
+
+  test("does not cache a failed org lookup — the next refresh retries", async () => {
+    let orgCalls = 0
+    const provider = new BuildkiteProvider({
+      token: "good",
+      fetch: async (url: string) => {
+        if (url.endsWith("/organizations")) {
+          orgCalls++
+          return jsonResponse([])
+        }
+        return jsonResponse([])
+      },
+    })
+
+    await provider.fetchRuns(emptyScope)
+    await provider.fetchRuns(emptyScope)
+    expect(orgCalls).toBe(2)
+  })
+})
+
+describe("BuildkiteProvider pipeline index caching", () => {
+  test("does not refetch the index within the 5-minute TTL", async () => {
+    let indexCalls = 0
+    let now = 0
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      now: () => now,
+      fetch: async (url: string) => {
+        if (url.includes("/pipelines?")) {
+          indexCalls++
+          return jsonResponse([usmPipeline])
+        }
+        return jsonResponse([])
+      },
+    })
+
+    await provider.fetchRuns({ repositories: ["inetalliance/usm"], organizations: [] })
+    now += 60_000 // one minute later — still within the TTL
+    await provider.fetchRuns({ repositories: ["inetalliance/usm"], organizations: [] })
+    expect(indexCalls).toBe(1)
+  })
+
+  test("refetches the index once the TTL has expired", async () => {
+    let indexCalls = 0
+    let now = 0
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      now: () => now,
+      fetch: async (url: string) => {
+        if (url.includes("/pipelines?")) {
+          indexCalls++
+          return jsonResponse([usmPipeline])
+        }
+        return jsonResponse([])
+      },
+    })
+
+    await provider.fetchRuns({ repositories: ["inetalliance/usm"], organizations: [] })
+    now += 6 * 60_000 // six minutes later — past the TTL
+    await provider.fetchRuns({ repositories: ["inetalliance/usm"], organizations: [] })
+    expect(indexCalls).toBe(2)
+  })
+
+  test("does not cache a failed index fetch", async () => {
+    let indexCalls = 0
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      fetch: async (url: string) => {
+        if (url.includes("/pipelines?")) {
+          indexCalls++
+          return new Response("", { status: 500 })
+        }
+        return jsonResponse([])
+      },
+    })
+
+    await provider.fetchRuns({ repositories: ["inetalliance/usm"], organizations: [] })
+    await provider.fetchRuns({ repositories: ["inetalliance/usm"], organizations: [] })
+    expect(indexCalls).toBe(2)
+  })
+
+  test("follows Link: rel=next across two pages of the pipeline index", async () => {
+    let indexCalls = 0
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      fetch: async (url: string) => {
+        if (url.includes("&page=2")) {
+          indexCalls++
+          return jsonResponse([distributorsPipeline])
+        }
+        if (url.includes("/pipelines?")) {
+          indexCalls++
+          return jsonResponse([usmPipeline], {
+            headers: {
+              link: '<https://api.buildkite.com/v2/organizations/acme/pipelines?per_page=100&page=2>; rel="next"',
+            },
+          })
+        }
+        return jsonResponse([])
+      },
+    })
+
+    const result = await provider.fetchRuns({
+      repositories: ["inetalliance/usm", "inetalliance/distributors"],
+      organizations: [],
+    })
+
+    expect(indexCalls).toBe(2)
+    // Both repos resolved thanks to the two pages having been merged; neither
+    // produces the "no pipeline" diagnostic.
+    expect(result.diagnostics.some((d) => d.message.includes("no pipeline"))).toBe(false)
   })
 })
 
 describe("BuildkiteProvider.fetchRuns endpoint selection", () => {
-  const pipelinePayload = [
-    {
-      id: "p1",
-      url: "x",
-      web_url: "x",
-      name: "site-content-usm",
-      slug: "site-content-usm",
-      repository: "git@github.com:inetalliance/usm.git",
-    },
-  ]
-
-  function buildPayload(id: string, number: number) {
-    return {
-      id,
-      number,
-      state: "passed",
-      commit: "deadbeef",
-      branch: "main",
-      web_url: "https://buildkite.com/x",
-      created_at: "2026-01-01T00:00:00Z",
-      pipeline: {
-        slug: "site-content-usm",
-        name: "site-content-usm",
-        repository: "git@github.com:inetalliance/usm.git",
-      },
-      jobs: [],
-    }
-  }
-
   test("scoped repositories fetch per-pipeline builds, not the org-wide endpoint", async () => {
     const requestedUrls: string[] = []
     const provider = new BuildkiteProvider({
@@ -178,7 +322,7 @@ describe("BuildkiteProvider.fetchRuns endpoint selection", () => {
       org: "acme",
       fetch: async (url: string) => {
         requestedUrls.push(url)
-        if (url.includes("/pipelines?")) return jsonResponse(pipelinePayload)
+        if (url.includes("/pipelines?")) return jsonResponse([usmPipeline])
         if (url.includes("/pipelines/site-content-usm/builds")) {
           return jsonResponse([buildPayload("b1", 1)])
         }
@@ -202,14 +346,13 @@ describe("BuildkiteProvider.fetchRuns endpoint selection", () => {
     )
   })
 
-  test("unscoped fetch hits the org-wide builds endpoint, not any pipeline endpoint", async () => {
+  test("unscoped fetch hits the org-wide builds endpoint, and never the pipeline index", async () => {
     const requestedUrls: string[] = []
     const provider = new BuildkiteProvider({
       token: "good",
       org: "acme",
       fetch: async (url: string) => {
         requestedUrls.push(url)
-        if (url.includes("/pipelines?")) return jsonResponse(pipelinePayload)
         if (url.includes("/organizations/acme/builds")) return jsonResponse([buildPayload("b1", 1)])
         return jsonResponse([])
       },
@@ -221,9 +364,7 @@ describe("BuildkiteProvider.fetchRuns endpoint selection", () => {
     expect(requestedUrls.some((u) => u.includes("/organizations/acme/builds?per_page=20"))).toBe(
       true,
     )
-    expect(requestedUrls.some((u) => u.includes("/pipelines/") && u.includes("/builds"))).toBe(
-      false,
-    )
+    expect(requestedUrls.some((u) => u.includes("/pipelines"))).toBe(false)
   })
 
   test("a scoped repo with no matching pipeline produces an info diagnostic naming it", async () => {
@@ -231,7 +372,7 @@ describe("BuildkiteProvider.fetchRuns endpoint selection", () => {
       token: "good",
       org: "acme",
       fetch: async (url: string) => {
-        if (url.includes("/pipelines?")) return jsonResponse(pipelinePayload)
+        if (url.includes("/pipelines?")) return jsonResponse([usmPipeline])
         return jsonResponse([])
       },
     })
@@ -254,7 +395,7 @@ describe("BuildkiteProvider.fetchRuns endpoint selection", () => {
       org: "acme",
       fetch: async (url: string) => {
         requestedUrls.push(url)
-        if (url.includes("/pipelines?")) return jsonResponse(pipelinePayload)
+        if (url.includes("/pipelines?")) return jsonResponse([usmPipeline])
         return jsonResponse([buildPayload("b1", 1)])
       },
     })
@@ -265,28 +406,262 @@ describe("BuildkiteProvider.fetchRuns endpoint selection", () => {
     expect(requestedUrls.some((u) => u.includes("exclude_jobs"))).toBe(false)
   })
 
-  test("follows Link: rel=next across two pages of builds", async () => {
-    let calls = 0
+  test("CRITICAL: ignores a Link header on the org-wide builds endpoint — one page only", async () => {
+    let buildsCalls = 0
     const provider = new BuildkiteProvider({
       token: "good",
       org: "acme",
       fetch: async (url: string) => {
-        if (url.includes("/pipelines?")) return jsonResponse([])
-        calls++
-        if (calls === 1) {
+        if (url.includes("/organizations/acme/builds")) {
+          buildsCalls++
           return jsonResponse([buildPayload("b1", 1)], {
             headers: {
               link: '<https://api.buildkite.com/v2/organizations/acme/builds?per_page=20&page=2>; rel="next"',
             },
           })
         }
-        return jsonResponse([buildPayload("b2", 2)])
+        return jsonResponse([])
       },
     })
 
     const result = await provider.fetchRuns(emptyScope)
-    expect(result.runs).toHaveLength(2)
-    expect(calls).toBe(2)
+    expect(result.runs).toHaveLength(1)
+    expect(buildsCalls).toBe(1)
+  })
+
+  test("CRITICAL: ignores a Link header on a per-pipeline builds endpoint — one page only", async () => {
+    let buildsCalls = 0
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      fetch: async (url: string) => {
+        if (url.includes("/pipelines?")) return jsonResponse([usmPipeline])
+        if (url.includes("/pipelines/site-content-usm/builds")) {
+          buildsCalls++
+          return jsonResponse([buildPayload("b1", 1)], {
+            headers: {
+              link: '<https://api.buildkite.com/v2/organizations/acme/pipelines/site-content-usm/builds?per_page=20&page=2>; rel="next"',
+            },
+          })
+        }
+        return jsonResponse([])
+      },
+    })
+
+    const result = await provider.fetchRuns({
+      repositories: ["inetalliance/usm"],
+      organizations: [],
+    })
+    expect(result.runs).toHaveLength(1)
+    expect(buildsCalls).toBe(1)
+  })
+})
+
+describe("BuildkiteProvider.fetchRuns pipeline selection modes", () => {
+  test("an explicit pipeline list is fetched directly when the scope is unscoped", async () => {
+    const requestedUrls: string[] = []
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      pipelines: ["explicit-slug"],
+      fetch: async (url: string) => {
+        requestedUrls.push(url)
+        if (url.includes("/pipelines/explicit-slug/builds"))
+          return jsonResponse([buildPayload("b1", 1)])
+        return jsonResponse([])
+      },
+    })
+
+    const result = await provider.fetchRuns(emptyScope)
+
+    expect(result.runs).toHaveLength(1)
+    expect(requestedUrls.some((u) => u.includes("/pipelines/explicit-slug/builds"))).toBe(true)
+    expect(requestedUrls.some((u) => u.includes("/organizations/acme/builds?per_page"))).toBe(false)
+    expect(requestedUrls.some((u) => u.includes("/pipelines?per_page"))).toBe(false)
+  })
+
+  test("an explicit pipeline list wins over scope.repositories — the repo is never looked up in the index", async () => {
+    const requestedUrls: string[] = []
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      pipelines: ["explicit-slug"],
+      fetch: async (url: string) => {
+        requestedUrls.push(url)
+        if (url.includes("/pipelines/explicit-slug/builds"))
+          return jsonResponse([buildPayload("b1", 1)])
+        return jsonResponse([])
+      },
+    })
+
+    const result = await provider.fetchRuns({
+      repositories: ["inetalliance/usm"],
+      organizations: [],
+    })
+
+    expect(result.runs).toHaveLength(1)
+    expect(requestedUrls.some((u) => u.includes("/pipelines/explicit-slug/builds"))).toBe(true)
+    // The index is never fetched at all — the explicit list bypasses it entirely.
+    expect(requestedUrls.some((u) => u.includes("/pipelines?per_page"))).toBe(false)
+    expect(result.diagnostics).toEqual([])
+  })
+
+  test("an empty explicit list falls back to deriving slugs from scope.repositories", async () => {
+    const requestedUrls: string[] = []
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      pipelines: [],
+      fetch: async (url: string) => {
+        requestedUrls.push(url)
+        if (url.includes("/pipelines?")) return jsonResponse([usmPipeline])
+        if (url.includes("/pipelines/site-content-usm/builds")) {
+          return jsonResponse([buildPayload("b1", 1)])
+        }
+        return jsonResponse([])
+      },
+    })
+
+    const result = await provider.fetchRuns({
+      repositories: ["inetalliance/usm"],
+      organizations: [],
+    })
+
+    expect(result.runs).toHaveLength(1)
+    expect(requestedUrls.some((u) => u.includes("/pipelines?"))).toBe(true)
+  })
+})
+
+describe("BuildkiteProvider.fetchRuns error handling", () => {
+  test("a non-auth HTTP error becomes an error diagnostic naming the status and path", async () => {
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      fetch: async () => new Response("", { status: 500 }),
+    })
+
+    const result = await provider.fetchRuns(emptyScope)
+    expect(result.runs).toEqual([])
+    expect(result.diagnostics[0].level).toBe("error")
+    expect(result.diagnostics[0].message).toBe(
+      "Buildkite: HTTP 500 from /organizations/acme/builds?per_page=20",
+    )
+  })
+
+  test("a network error (fetch rejects) becomes an error diagnostic and fetchRuns resolves", async () => {
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      fetch: async () => {
+        throw new Error("network down")
+      },
+    })
+
+    const result = await provider.fetchRuns(emptyScope)
+    expect(result.runs).toEqual([])
+    expect(result.diagnostics[0].level).toBe("error")
+    expect(result.diagnostics[0].message).toContain("network down")
+  })
+
+  test("malformed JSON becomes an error diagnostic and fetchRuns resolves", async () => {
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      fetch: async () => new Response("not json", { status: 200 }),
+    })
+
+    const result = await provider.fetchRuns(emptyScope)
+    expect(result.runs).toEqual([])
+    expect(result.diagnostics[0].level).toBe("error")
+  })
+
+  test("one failing pipeline produces an error diagnostic naming it, without hiding the rest", async () => {
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      pipelines: ["missing-slug", "site-content-usm"],
+      fetch: async (url: string) => {
+        if (url.includes("/pipelines/missing-slug/builds")) return new Response("", { status: 404 })
+        if (url.includes("/pipelines/site-content-usm/builds"))
+          return jsonResponse([buildPayload("b1", 1)])
+        return jsonResponse([])
+      },
+    })
+
+    const result = await provider.fetchRuns(emptyScope)
+    expect(result.runs).toHaveLength(1)
+    const errorDiag = result.diagnostics.find((d) => d.level === "error")
+    expect(errorDiag?.message).toContain("missing-slug")
+    expect(errorDiag?.message).toContain("404")
+  })
+
+  test("a malformed build payload (no jobs field) becomes a diagnostic, not a rejection", async () => {
+    // A build payload missing `jobs` entirely, as a real API response never should.
+    const { jobs: _jobs, ...malformed } = buildPayload("b1", 1)
+
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      fetch: async () => jsonResponse([malformed, buildPayload("b2", 2)]),
+    })
+
+    const result = await provider.fetchRuns(emptyScope)
+    // The well-formed build still comes through; the malformed one is a diagnostic.
+    expect(result.runs).toHaveLength(1)
+    expect(result.runs[0].id).toBe("b2")
+    expect(result.diagnostics.some((d) => d.level === "error")).toBe(true)
+  })
+})
+
+describe("BuildkiteProvider host restriction", () => {
+  test("logs() refuses to send the token to a non-Buildkite host", async () => {
+    let evilHostCalled = false
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      fetch: async (url: string) => {
+        if (url.includes("evil.example")) {
+          evilHostCalled = true
+          return jsonResponse({ content: "should never be requested" })
+        }
+        return jsonResponse(
+          buildPayload("b1", 42, {
+            jobs: [{ id: "j", state: "failed", log_url: "https://evil.example/log" }],
+          }),
+        )
+      },
+    })
+
+    await expect(provider.logs(sampleRun())).rejects.toThrow(/unexpected host/)
+    expect(evilHostCalled).toBe(false)
+  })
+
+  test("getAll refuses to follow a Link header to a non-Buildkite host", async () => {
+    let evilHostCalled = false
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      fetch: async (url: string) => {
+        if (url.includes("evil.example")) {
+          evilHostCalled = true
+          return jsonResponse([])
+        }
+        if (url.includes("/pipelines?")) {
+          return jsonResponse([usmPipeline], {
+            headers: { link: '<https://evil.example/next>; rel="next"' },
+          })
+        }
+        return jsonResponse([])
+      },
+    })
+
+    const result = await provider.fetchRuns({
+      repositories: ["inetalliance/usm"],
+      organizations: [],
+    })
+    // The bad Link is caught and turned into a diagnostic, not sent to.
+    expect(result.diagnostics.some((d) => d.message.includes("unexpected host"))).toBe(true)
+    expect(evilHostCalled).toBe(false)
   })
 })
 
@@ -343,6 +718,15 @@ describe("BuildkiteProvider actions", () => {
     const provider = new BuildkiteProvider({ token: "good", org: "acme" })
     await expect(provider.cancel(sampleRun({ pipelineSlug: undefined }))).rejects.toThrow()
   })
+
+  test("a 403 on cancel names write_builds, not the read scopes", async () => {
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      fetch: async () => new Response("", { status: 403 }),
+    })
+    await expect(provider.cancel(sampleRun())).rejects.toThrow(/write_builds/)
+  })
 })
 
 describe("BuildkiteProvider.logs", () => {
@@ -355,43 +739,43 @@ describe("BuildkiteProvider.logs", () => {
   }
 
   test("prefers the first failed or timed-out job with a log_url", async () => {
+    let requestedLogUrl: string | undefined
     const provider = new BuildkiteProvider({
       token: "good",
       org: "acme",
       fetch: async (url: string) => {
-        if (url.includes("/log")) return jsonResponse({ content: "failure output" })
-        return jsonResponse({
-          id: "b1",
-          number: 42,
-          state: "failed",
-          commit: "deadbeef",
-          branch: "main",
-          web_url: "x",
-          created_at: "2026-01-01T00:00:00Z",
-          pipeline: { slug: "site-content-usm", name: "site-content-usm", repository: "x" },
-          jobs: [
-            jobPayload({
-              id: "upload",
-              state: "passed",
-              log_url: "https://api.buildkite.com/v2/log/upload",
-            }),
-            jobPayload({
-              id: "failing",
-              state: "failed",
-              log_url: "https://api.buildkite.com/v2/log/failing",
-            }),
-            jobPayload({
-              id: "later",
-              state: "passed",
-              log_url: "https://api.buildkite.com/v2/log/later",
-            }),
-          ],
-        })
+        if (url.includes("/log/")) {
+          requestedLogUrl = url
+          return jsonResponse({ content: "failure output" })
+        }
+        return jsonResponse(
+          buildPayload("b1", 42, {
+            state: "failed",
+            jobs: [
+              jobPayload({
+                id: "upload",
+                state: "passed",
+                log_url: "https://api.buildkite.com/v2/log/upload",
+              }),
+              jobPayload({
+                id: "failing",
+                state: "failed",
+                log_url: "https://api.buildkite.com/v2/log/failing",
+              }),
+              jobPayload({
+                id: "later",
+                state: "passed",
+                log_url: "https://api.buildkite.com/v2/log/later",
+              }),
+            ],
+          }),
+        )
       },
     })
 
     const content = await provider.logs(sampleRun())
     expect(content).toBe("failure output")
+    expect(requestedLogUrl).toBe("https://api.buildkite.com/v2/log/failing")
   })
 
   test("falls back to the last job with a log_url when nothing failed", async () => {
@@ -404,28 +788,22 @@ describe("BuildkiteProvider.logs", () => {
           requestedLogUrl = url
           return jsonResponse({ content: "last job output" })
         }
-        return jsonResponse({
-          id: "b1",
-          number: 42,
-          state: "passed",
-          commit: "deadbeef",
-          branch: "main",
-          web_url: "x",
-          created_at: "2026-01-01T00:00:00Z",
-          pipeline: { slug: "site-content-usm", name: "site-content-usm", repository: "x" },
-          jobs: [
-            jobPayload({
-              id: "upload",
-              state: "passed",
-              log_url: "https://api.buildkite.com/v2/log/upload",
-            }),
-            jobPayload({
-              id: "build",
-              state: "passed",
-              log_url: "https://api.buildkite.com/v2/log/build",
-            }),
-          ],
-        })
+        return jsonResponse(
+          buildPayload("b1", 42, {
+            jobs: [
+              jobPayload({
+                id: "upload",
+                state: "passed",
+                log_url: "https://api.buildkite.com/v2/log/upload",
+              }),
+              jobPayload({
+                id: "build",
+                state: "passed",
+                log_url: "https://api.buildkite.com/v2/log/build",
+              }),
+            ],
+          }),
+        )
       },
     })
 

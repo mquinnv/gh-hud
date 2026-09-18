@@ -11,6 +11,9 @@ import {
 import type { CiProvider, FetchResult, ProviderDiagnostic, Scope } from "./types.js"
 
 const API = "https://api.buildkite.com/v2"
+/** The token is only ever sent to this origin — never to a Link header or a
+ * log_url that happens to point somewhere else. */
+const API_ORIGIN = "https://api.buildkite.com/"
 
 /** How often the pipeline index is refreshed — pipelines change far more slowly than builds. */
 const PIPELINE_INDEX_TTL_MS = 5 * 60 * 1000
@@ -21,10 +24,15 @@ export interface BuildkiteProviderOptions {
   token?: string
   /** Auto-detected when the token reaches exactly one organization. */
   org?: string
-  /** Explicit pipeline slugs to watch when `Scope.repositories` is empty. */
+  /**
+   * Explicit pipeline slugs. Non-empty wins over deriving slugs from
+   * `Scope.repositories`, in both scoped and unscoped modes.
+   */
   pipelines?: string[]
   /** Injectable so tests never touch the network. */
   fetch?: FetchLike
+  /** Testing seam for the pipeline index TTL. Defaults to `Date.now`. */
+  now?: () => number
 }
 
 export function resolveBuildkiteToken(
@@ -49,20 +57,31 @@ export function nextLink(header: string | null): string | undefined {
 
 /** A token that is present but rejected by the API (401/403) — must be loud. */
 export class TokenRejected extends Error {
-  constructor() {
-    super("Buildkite token rejected")
+  constructor(scope: "read" | "write" = "read") {
+    super(
+      scope === "write"
+        ? "token rejected — check scopes (needs write_builds)"
+        : "token rejected — check scopes (needs read_builds, read_pipelines)",
+    )
   }
 }
 
 class AmbiguousOrganization extends Error {
-  constructor(readonly slugs: string[]) {
-    super(`Ambiguous Buildkite organization: ${slugs.join(", ")}`)
+  constructor(slugs: string[]) {
+    super(`several orgs reachable (${slugs.join(", ")}) — set buildkite.org or --bk-org`)
   }
 }
 
 class NoOrganizations extends Error {
   constructor() {
-    super("Buildkite token reaches no organizations")
+    super("token reaches no organizations")
+  }
+}
+
+/** A non-auth HTTP failure. `path` is the request path only — never the token. */
+class HttpError extends Error {
+  constructor(status: number, path: string) {
+    super(`HTTP ${status} from ${path}`)
   }
 }
 
@@ -86,6 +105,7 @@ export class BuildkiteProvider implements CiProvider {
   private readonly configuredOrg?: string
   private readonly explicitPipelines: string[]
   private readonly fetchImpl: FetchLike
+  private readonly now: () => number
   private readonly limit = 20
 
   private resolvedOrg?: string
@@ -97,6 +117,7 @@ export class BuildkiteProvider implements CiProvider {
     this.configuredOrg = options.org
     this.explicitPipelines = options.pipelines ?? []
     this.fetchImpl = options.fetch ?? ((url, init) => fetch(url, init))
+    this.now = options.now ?? Date.now
   }
 
   async fetchRuns(scope: Scope): Promise<FetchResult> {
@@ -120,18 +141,20 @@ export class BuildkiteProvider implements CiProvider {
       return { runs: [], diagnostics: [this.diagnoseFetchError(error)] }
     }
 
-    let index: Map<string, string[]>
-    try {
-      index = await this.getPipelineIndex(org)
-    } catch (error) {
-      return { runs: [], diagnostics: [this.diagnoseFetchError(error)] }
-    }
-
     const diagnostics: ProviderDiagnostic[] = []
-    const scoped = scope.repositories.length > 0 || this.explicitPipelines.length > 0
-    const slugs: string[] = []
-
-    if (scope.repositories.length > 0) {
+    // A configured pipeline list wins over deriving slugs from the scope, in
+    // both scoped and unscoped modes — it never touches the index.
+    let slugs: string[] | undefined
+    if (this.explicitPipelines.length > 0) {
+      slugs = this.explicitPipelines
+    } else if (scope.repositories.length > 0) {
+      let index: Map<string, string[]>
+      try {
+        index = await this.getPipelineIndex(org)
+      } catch (error) {
+        return { runs: [], diagnostics: [this.diagnoseFetchError(error)] }
+      }
+      slugs = []
       for (const repo of scope.repositories) {
         const repoSlugs = index.get(repo)
         if (!repoSlugs || repoSlugs.length === 0) {
@@ -144,41 +167,52 @@ export class BuildkiteProvider implements CiProvider {
         }
         slugs.push(...repoSlugs)
       }
-    } else if (this.explicitPipelines.length > 0) {
-      slugs.push(...this.explicitPipelines)
     }
+    // Otherwise `slugs` stays undefined: unscoped, org-wide.
 
     const builds: BuildkiteBuildPayload[] = []
-    try {
-      if (scoped) {
-        for (const slug of slugs) {
+    if (slugs) {
+      for (const slug of slugs) {
+        try {
           builds.push(
-            ...(await this.getAll<BuildkiteBuildPayload>(
-              // Never `exclude_jobs` — embedded jobs are how fetchRuns returns them for free.
+            ...(await this.getPage<BuildkiteBuildPayload>(
+              // `per_page` is a window of the N most recent builds, not
+              // something to paginate through — one page, ever. Never
+              // `exclude_jobs`: embedded jobs are how fetchRuns returns them
+              // for free.
               `/organizations/${org}/pipelines/${slug}/builds?per_page=${this.limit}`,
             )),
           )
+        } catch (error) {
+          // Caught per slug so one bad pipeline doesn't hide the rest.
+          diagnostics.push(this.diagnoseFetchError(error))
         }
-      } else {
+      }
+    } else {
+      try {
         builds.push(
-          ...(await this.getAll<BuildkiteBuildPayload>(
+          ...(await this.getPage<BuildkiteBuildPayload>(
             `/organizations/${org}/builds?per_page=${this.limit}`,
           )),
         )
+      } catch (error) {
+        diagnostics.push(this.diagnoseFetchError(error))
       }
-    } catch (error) {
-      diagnostics.push(this.diagnoseFetchError(error))
     }
 
     const runs: Run[] = []
     const jobs = new Map<string, Job[]>()
     for (const raw of builds) {
-      const run = mapBuildkiteBuild(raw)
-      runs.push(run)
-      jobs.set(
-        run.key,
-        raw.jobs.map((job) => mapBuildkiteJob(job, run.key)),
-      )
+      try {
+        const run = mapBuildkiteBuild(raw)
+        const runJobs = raw.jobs.map((job) => mapBuildkiteJob(job, run.key))
+        runs.push(run)
+        jobs.set(run.key, runJobs)
+      } catch (error) {
+        // A malformed build (e.g. missing `jobs`) is a diagnostic, not a
+        // reason to fail the whole refresh.
+        diagnostics.push(this.diagnoseFetchError(error))
+      }
     }
 
     return { runs, jobs, diagnostics }
@@ -210,14 +244,10 @@ export class BuildkiteProvider implements CiProvider {
     const build = await this.getOne<BuildkiteBuildPayload>(
       `/organizations/${org}/pipelines/${slug}/builds/${run.number}`,
     )
-    const job = pickLogJob(build.jobs)
+    const job = pickLogJob(build.jobs ?? [])
     if (!job?.log_url) return ""
 
-    const response = await this.fetchImpl(job.log_url, {
-      headers: { Authorization: `Bearer ${this.token}` },
-    })
-    if (response.status === 401 || response.status === 403) throw new TokenRejected()
-    if (!response.ok) throw new Error(`Buildkite ${response.status}`)
+    const response = await this.request(job.log_url)
     const payload = (await response.json()) as { content?: string }
     return payload.content ?? ""
   }
@@ -236,6 +266,7 @@ export class BuildkiteProvider implements CiProvider {
       return this.resolvedOrg
     }
 
+    // Not cached on failure: a bad lookup must retry on the next refresh.
     const orgs = await this.getAll<{ slug: string }>("/organizations")
     if (orgs.length === 1) {
       this.resolvedOrg = orgs[0].slug
@@ -246,10 +277,11 @@ export class BuildkiteProvider implements CiProvider {
   }
 
   private async getPipelineIndex(org: string): Promise<Map<string, string[]>> {
-    const now = Date.now()
+    const now = this.now()
     if (this.pipelineIndex && now - this.pipelineIndex.timestamp < PIPELINE_INDEX_TTL_MS) {
       return this.pipelineIndex.index
     }
+    // Not cached on failure, same reasoning as resolveOrg.
     const pipelines = await this.getAll<BuildkitePipelinePayload>(
       `/organizations/${org}/pipelines?per_page=100`,
     )
@@ -258,63 +290,71 @@ export class BuildkiteProvider implements CiProvider {
     return index
   }
 
-  /** A paginating GET that follows `Link: rel="next"` across an array response. */
+  /**
+   * A paginating GET that follows `Link: rel="next"` across an array
+   * response. Only for `/organizations` and the pipeline index — builds use
+   * `getPage`, exactly once, regardless of any Link header they carry.
+   */
   private async getAll<T>(path: string): Promise<T[]> {
     const out: T[] = []
     let url: string | undefined = path.startsWith("http") ? path : `${API}${path}`
     while (url) {
-      const response = await this.fetchImpl(url, {
-        headers: { Authorization: `Bearer ${this.token}` },
-      })
-      if (response.status === 401 || response.status === 403) throw new TokenRejected()
-      if (!response.ok) throw new Error(`Buildkite ${response.status}`)
+      const response = await this.request(url)
       out.push(...((await response.json()) as T[]))
       url = nextLink(response.headers.get("link"))
     }
     return out
   }
 
+  /**
+   * A single-page GET for an array response. Builds only: `per_page` is a
+   * window of the N most recent builds, not something to exhaust by
+   * following `Link: rel="next"` — that would walk the entire build history
+   * every refresh.
+   */
+  private async getPage<T>(path: string): Promise<T[]> {
+    const response = await this.request(`${API}${path}`)
+    return (await response.json()) as T[]
+  }
+
   /** A GET for a single-object response, e.g. one build. */
   private async getOne<T>(path: string): Promise<T> {
-    const response = await this.fetchImpl(`${API}${path}`, {
-      headers: { Authorization: `Bearer ${this.token}` },
-    })
-    if (response.status === 401 || response.status === 403) throw new TokenRejected()
-    if (!response.ok) throw new Error(`Buildkite ${response.status}`)
+    const response = await this.request(`${API}${path}`)
     return (await response.json()) as T
   }
 
   private async write(path: string): Promise<void> {
-    const response = await this.fetchImpl(`${API}${path}`, {
-      method: "PUT",
-      headers: { Authorization: `Bearer ${this.token}` },
+    await this.request(`${API}${path}`, { method: "PUT" }, "write")
+  }
+
+  /**
+   * The one place a request actually goes out. Refuses to send the token
+   * anywhere but the Buildkite API — a `Link` header or a job's `log_url`
+   * pointing elsewhere must not receive it.
+   */
+  private async request(
+    url: string,
+    init?: RequestInit,
+    tokenScope: "read" | "write" = "read",
+  ): Promise<Response> {
+    if (!url.startsWith(API_ORIGIN)) {
+      throw new Error(`refusing to send the token to an unexpected host: ${url}`)
+    }
+    const response = await this.fetchImpl(url, {
+      ...init,
+      headers: { ...init?.headers, Authorization: `Bearer ${this.token}` },
     })
-    if (response.status === 401 || response.status === 403) throw new TokenRejected()
-    if (!response.ok) throw new Error(`Buildkite ${response.status}`)
+    if (response.status === 401 || response.status === 403) {
+      throw new TokenRejected(tokenScope)
+    }
+    if (!response.ok) {
+      const path = url.startsWith(API) ? url.slice(API.length) : url
+      throw new HttpError(response.status, path)
+    }
+    return response
   }
 
   private diagnoseFetchError(error: unknown): ProviderDiagnostic {
-    if (error instanceof TokenRejected) {
-      return {
-        provider: "buildkite",
-        level: "error",
-        message: "Buildkite: token rejected — check scopes (needs read_builds, read_pipelines)",
-      }
-    }
-    if (error instanceof AmbiguousOrganization) {
-      return {
-        provider: "buildkite",
-        level: "error",
-        message: `Buildkite: several orgs reachable (${error.slugs.join(", ")}) — set buildkite.org or --bk-org`,
-      }
-    }
-    if (error instanceof NoOrganizations) {
-      return {
-        provider: "buildkite",
-        level: "error",
-        message: "Buildkite: token reaches no organizations",
-      }
-    }
     const message = error instanceof Error ? error.message : String(error)
     return { provider: "buildkite", level: "error", message: `Buildkite: ${message}` }
   }
