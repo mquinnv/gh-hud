@@ -1946,6 +1946,31 @@ Press '?', '/', or 'Esc' to close...`,
     return lines.join("\n")
   }
 
+  /**
+   * A compact, red status-bar segment for the current refresh's error-level
+   * diagnostics — never info-level ones (a missing Buildkite token must stay
+   * silent, not become a permanent warning for users with no Buildkite
+   * account). Empty cards already show diagnostics in the empty-state panel,
+   * but healthy GitHub cards can otherwise hide a Buildkite provider that is
+   * loudly failing beside them; this is what keeps that visible without
+   * relying on the event log, which scrolls away. `this.diagnostics` is
+   * replaced wholesale on every `updateWorkflows` call, so this clears itself
+   * the moment a refresh no longer reports the error — nothing lingers.
+   */
+  private errorDiagnosticsSegment(): string {
+    const errors = this.diagnostics.filter((d) => d.level === "error")
+    if (errors.length === 0) return ""
+
+    const maxLen = 60
+    const extra = errors.length - 1
+    const suffix = extra > 0 ? ` (+${extra} more)` : ""
+    const budget = Math.max(10, maxLen - suffix.length - "⚠ ".length)
+    const message = errors[0].message
+    const truncated = message.length > budget ? `${message.slice(0, budget - 1)}…` : message
+
+    return ` | {red-fg}⚠ ${truncated}${suffix}{/red-fg}`
+  }
+
   private updateStatusBar(): void {
     const runningCount = this.workflows.filter((w) => w.status === "running").length
     const queuedCount = this.workflows.filter((w) => w.status === "queued").length
@@ -1974,6 +1999,7 @@ Press '?', '/', or 'Esc' to close...`,
       line1 += ` | {green-fg}✓{/} Done: ${completedCount}`
     }
     line1 += ` | Total: ${this.workflows.length}`
+    line1 += this.errorDiagnosticsSegment()
 
     // Line 2: Context-aware keyboard shortcuts
     const shortcuts = this.getContextualShortcuts()

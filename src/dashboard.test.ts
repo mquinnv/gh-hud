@@ -245,3 +245,68 @@ describe("empty-state diagnostics", () => {
     dashboard.updateWorkflows([], new Map(), undefined, undefined, [])
   })
 })
+
+// The persistent status-bar warning (Ruling 29): with real, healthy cards on
+// screen — e.g. GitHub runs from phenixcrm/* — a Buildkite provider that is
+// loudly failing on inetalliance/* must not be reduced to one line in the
+// scrolling event log. Only error-level diagnostics ever reach here; a
+// missing-token info diagnostic must stay silent for accounts with no
+// Buildkite at all.
+const statusBarContent = (): string =>
+  (dashboard as unknown as { statusBox: { getContent(): string } }).statusBox.getContent()
+
+describe("status-bar error diagnostics", () => {
+  test("an error diagnostic appears in the status bar alongside existing cards", () => {
+    const run = makeRun({ status: "running" })
+    dashboard.updateWorkflows([run], new Map(), undefined, undefined, [
+      {
+        provider: "buildkite",
+        level: "error",
+        message: "Buildkite: token rejected — check scopes",
+      },
+    ])
+
+    expect(statusBarContent()).toContain("Buildkite: token rejected — check scopes")
+  })
+
+  test("an info diagnostic never appears in the status bar", () => {
+    const run = makeRun({ status: "running" })
+    dashboard.updateWorkflows([run], new Map(), undefined, undefined, [
+      {
+        provider: "buildkite",
+        level: "info",
+        message: "Buildkite: no token ($BUILDKITE_API_TOKEN or buildkite.token) — skipped",
+      },
+    ])
+
+    expect(statusBarContent()).not.toContain("Buildkite: no token")
+  })
+
+  test("the indicator disappears once a refresh no longer reports the error", () => {
+    const run = makeRun({ status: "running" })
+    dashboard.updateWorkflows([run], new Map(), undefined, undefined, [
+      { provider: "buildkite", level: "error", message: "Buildkite: token rejected" },
+    ])
+    expect(statusBarContent()).toContain("token rejected")
+
+    dashboard.updateWorkflows([run], new Map(), undefined, undefined, [])
+    expect(statusBarContent()).not.toContain("token rejected")
+  })
+
+  test("several errors show the first message plus a count of the rest", () => {
+    const run = makeRun({ status: "running" })
+    dashboard.updateWorkflows([run], new Map(), undefined, undefined, [
+      { provider: "buildkite", level: "error", message: "first error" },
+      { provider: "github", level: "error", message: "second error" },
+      { provider: "github", level: "error", message: "third error" },
+    ])
+
+    const content = statusBarContent()
+    expect(content).toContain("first error")
+    expect(content).toContain("+2 more")
+    expect(content).not.toContain("second error")
+
+    // Leave the shared dashboard back in its diagnostic-free starting state.
+    dashboard.updateWorkflows([], new Map(), undefined, undefined, [])
+  })
+})

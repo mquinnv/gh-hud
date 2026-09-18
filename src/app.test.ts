@@ -3,6 +3,7 @@ import { App } from "./app.js"
 import { ConfigManager } from "./config.js"
 import type { Dashboard } from "./dashboard.js"
 import type { BuildkiteProviderOptions } from "./providers/buildkite.js"
+import type { GitHubProvider } from "./providers/github.js"
 import type { CiProvider, FetchResult, Scope } from "./providers/types.js"
 import type { RunStatus } from "./status.js"
 import type { BuildkiteConfig, Job, Provider, Run } from "./types.js"
@@ -425,7 +426,7 @@ describe("provider assembly", () => {
     expect(captured).toHaveLength(0)
   })
 
-  test("--no-github omits GitHubProvider from the CI list, but the provider is otherwise untouched", () => {
+  test("--no-github omits GitHubProvider from the CI provider list", () => {
     const { internals } = makeAssemblyApp()
 
     const providers = internals.buildProviders({ noGithub: true })
@@ -497,6 +498,48 @@ describe("initialize() and injected providers", () => {
 
     expect(internals.providers).toEqual([provider])
     expect(buildkiteFactoryCalls).toBe(0)
+
+    app.stop()
+  })
+})
+
+describe("--no-github disables GitHub CI runs only (Ruling 26)", () => {
+  test("repository resolution and PR fetching still go through the GitHub provider", async () => {
+    const { dashboard } = makeDashboard()
+    const configManager = new ConfigManager()
+    let getAllPullRequestsCalls = 0
+    const fakeGithub = {
+      name: "github",
+      async getAllPullRequests(_repos: string[]) {
+        getAllPullRequestsCalls++
+        return []
+      },
+      async listRepositories() {
+        return []
+      },
+    } as unknown as GitHubProvider
+
+    const app = new App({
+      github: fakeGithub,
+      dashboard,
+      configManager,
+      // Buildkite is left to build for real off empty config — no token in
+      // this environment, so it silently skips with an info diagnostic and
+      // makes no request.
+    })
+
+    await app.initialize({
+      repositories: ["acme/widgets"],
+      showPRs: true,
+      noGithub: true,
+    })
+    const internals = app as unknown as AppInternals
+
+    // GitHub is excluded from the CI provider list...
+    expect(internals.providers.map((p) => p.name)).not.toContain("github")
+    // ...but PR fetching (governed by --show-prs, not --no-github) still
+    // went through the same GitHub provider instance.
+    expect(getAllPullRequestsCalls).toBeGreaterThan(0)
 
     app.stop()
   })
