@@ -19,6 +19,28 @@ const API_ORIGIN = "https://api.buildkite.com/"
 /** How often the pipeline index is refreshed — pipelines change far more slowly than builds. */
 const PIPELINE_INDEX_TTL_MS = 5 * 60 * 1000
 
+// Buildkite's REST API allows 50 requests/minute per user, and that budget is
+// shared with every other client using the same token. The dashboard refreshes
+// every 5s, so one request per pipeline per refresh is 12/min per pipeline:
+// five pipelines alone blow the limit. Up to this many slugs, per-pipeline
+// requests are cheap enough and give per-pipeline error diagnostics; beyond it,
+// a single org-wide request filtered client-side costs one request no matter
+// how many pipelines are in scope.
+const MAX_PER_PIPELINE_SLUGS = 2
+
+/** The org-wide window: wide enough that a filtered scope still sees its builds. */
+const ORG_WIDE_PER_PAGE = 100
+
+// A minimum spacing between network fetches of builds. This deliberately
+// reverses the earlier "no builds cache" decision: at the 5s refresh interval
+// even a single request per refresh is 12/min, a quarter of the shared budget.
+// A call inside the window gets the previous result (runs, jobs and
+// diagnostics) back without any request.
+const MIN_FETCH_INTERVAL_MS = 15_000
+
+/** Backoff after a 429 that names no reset time, in seconds. */
+const DEFAULT_RATE_LIMIT_RESET_S = 60
+
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>
 
 export interface BuildkiteProviderOptions {
@@ -32,7 +54,10 @@ export interface BuildkiteProviderOptions {
   pipelines?: string[]
   /** Injectable so tests never touch the network. */
   fetch?: FetchLike
-  /** Testing seam for the pipeline index TTL. Defaults to `Date.now`. */
+  /**
+   * Testing seam for the pipeline index TTL, the minimum fetch interval and
+   * 429 backoff. Defaults to `Date.now`.
+   */
   now?: () => number
 }
 
@@ -79,6 +104,36 @@ class NoOrganizations extends Error {
   }
 }
 
+/**
+ * A 429. Its own class: being throttled says nothing about the token, so it
+ * must never be reported as a rejected one.
+ */
+class RateLimited extends Error {
+  constructor(remainingMs: number) {
+    super(`rate limited — retrying in ${Math.ceil(Math.max(0, remainingMs) / 1000)}s`)
+  }
+}
+
+/** Seconds until a 429 lifts: the user-scoped header, the org-scoped one, the body, else 60. */
+async function rateLimitResetSeconds(response: Response): Promise<number> {
+  for (const header of ["RateLimit-User-Reset", "RateLimit-Reset"]) {
+    const value = Number(response.headers.get(header))
+    if (response.headers.get(header) !== null && Number.isFinite(value) && value >= 0) {
+      return value
+    }
+  }
+  try {
+    const body = (await response.json()) as { reset?: unknown }
+    const reset = Number(body?.reset)
+    if (body?.reset !== undefined && body?.reset !== null && Number.isFinite(reset) && reset >= 0) {
+      return reset
+    }
+  } catch {
+    // No JSON body: fall through to the default.
+  }
+  return DEFAULT_RATE_LIMIT_RESET_S
+}
+
 /** A non-auth HTTP failure. `path` is the request path only — never the token. */
 class HttpError extends Error {
   constructor(status: number, path: string) {
@@ -111,6 +166,12 @@ export class BuildkiteProvider implements CiProvider {
 
   private resolvedOrg?: string
   private pipelineIndex?: { index: Map<string, string[]>; timestamp: number }
+  /** The most recent network fetch of builds: when it began, and what it returned. */
+  private lastFetch?: { startedAt: number; scopeKey: string; result: FetchResult }
+  /** The most recent fetch that was not rate limited — shown while backing off. */
+  private lastGood?: FetchResult
+  /** No Buildkite request is made before this time (epoch ms) after a 429. */
+  private rateLimitedUntil?: number
 
   constructor(options: BuildkiteProviderOptions) {
     const trimmed = options.token?.trim()
@@ -135,10 +196,53 @@ export class BuildkiteProvider implements CiProvider {
       }
     }
 
+    const now = this.now()
+    const scopeKey = scope.repositories.join(",")
+    if (
+      this.lastFetch &&
+      this.lastFetch.scopeKey === scopeKey &&
+      now - this.lastFetch.startedAt < MIN_FETCH_INTERVAL_MS
+    ) {
+      return this.lastFetch.result
+    }
+    if (this.isBackingOff()) {
+      return this.rateLimitedResult()
+    }
+
+    this.lastFetch = { startedAt: now, scopeKey, result: { runs: [], diagnostics: [] } }
+    let result: FetchResult
+    try {
+      result = await this.fetchRunsFromNetwork(scope)
+      this.lastGood = result
+    } catch (error) {
+      if (!(error instanceof RateLimited)) throw error
+      result = this.rateLimitedResult()
+    }
+    this.lastFetch.result = result
+    return result
+  }
+
+  private isBackingOff(): boolean {
+    return this.rateLimitedUntil !== undefined && this.now() < this.rateLimitedUntil
+  }
+
+  /** The last good runs and jobs, with exactly one diagnostic saying why they are stale. */
+  private rateLimitedResult(): FetchResult {
+    const remaining = (this.rateLimitedUntil ?? this.now()) - this.now()
+    return {
+      runs: this.lastGood?.runs ?? [],
+      jobs: this.lastGood?.jobs,
+      diagnostics: [this.diagnoseFetchError(new RateLimited(remaining))],
+    }
+  }
+
+  /** One real fetch. Throws only RateLimited; every other failure is a diagnostic. */
+  private async fetchRunsFromNetwork(scope: Scope): Promise<FetchResult> {
     let org: string
     try {
       org = await this.resolveOrg()
     } catch (error) {
+      if (error instanceof RateLimited) throw error
       return { runs: [], diagnostics: [this.diagnoseFetchError(error)] }
     }
 
@@ -153,6 +257,7 @@ export class BuildkiteProvider implements CiProvider {
       try {
         index = await this.getPipelineIndex(org)
       } catch (error) {
+        if (error instanceof RateLimited) throw error
         return { runs: [], diagnostics: [this.diagnoseFetchError(error)] }
       }
       slugs = []
@@ -172,7 +277,7 @@ export class BuildkiteProvider implements CiProvider {
     // Otherwise `slugs` stays undefined: unscoped, org-wide.
 
     const builds: BuildkiteBuildPayload[] = []
-    if (slugs) {
+    if (slugs && slugs.length <= MAX_PER_PIPELINE_SLUGS) {
       for (const slug of slugs) {
         try {
           builds.push(
@@ -185,18 +290,23 @@ export class BuildkiteProvider implements CiProvider {
             )),
           )
         } catch (error) {
+          // A 429 stops the loop: every further request would be refused too.
+          if (error instanceof RateLimited) throw error
           // Caught per slug so one bad pipeline doesn't hide the rest.
           diagnostics.push(this.diagnoseFetchError(error))
         }
       }
     } else {
+      // Unscoped, or too many pipelines to afford one request each: one
+      // org-wide request, filtered here to the pipelines in scope.
+      const wanted = slugs ? new Set(slugs) : undefined
       try {
-        builds.push(
-          ...(await this.getPage<BuildkiteBuildPayload>(
-            `/organizations/${org}/builds?per_page=${this.limit}`,
-          )),
+        const page = await this.getPage<BuildkiteBuildPayload>(
+          `/organizations/${org}/builds?per_page=${ORG_WIDE_PER_PAGE}`,
         )
+        builds.push(...(wanted ? page.filter((b) => wanted.has(b.pipeline?.slug)) : page))
       } catch (error) {
+        if (error instanceof RateLimited) throw error
         diagnostics.push(this.diagnoseFetchError(error))
       }
     }
@@ -343,10 +453,19 @@ export class BuildkiteProvider implements CiProvider {
     if (!url.startsWith(API_ORIGIN)) {
       throw new Error(`refusing to send the token to an unexpected host: ${url}`)
     }
+    // While backing off from a 429, no request goes out at all.
+    if (this.isBackingOff()) {
+      throw new RateLimited((this.rateLimitedUntil ?? 0) - this.now())
+    }
     const response = await this.fetchImpl(url, {
       ...init,
       headers: { ...init?.headers, Authorization: `Bearer ${this.token}` },
     })
+    if (response.status === 429) {
+      const resetMs = (await rateLimitResetSeconds(response)) * 1000
+      this.rateLimitedUntil = this.now() + resetMs
+      throw new RateLimited(resetMs)
+    }
     if (response.status === 401 || response.status === 403) {
       throw new TokenRejected(tokenScope)
     }

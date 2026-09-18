@@ -199,8 +199,10 @@ describe("BuildkiteProvider org resolution caching", () => {
 
   test("does not cache a failed org lookup — the next refresh retries", async () => {
     let orgCalls = 0
+    let now = 0
     const provider = new BuildkiteProvider({
       token: "good",
+      now: () => now,
       fetch: async (url: string) => {
         if (url.endsWith("/organizations")) {
           orgCalls++
@@ -211,6 +213,7 @@ describe("BuildkiteProvider org resolution caching", () => {
     })
 
     await provider.fetchRuns(emptyScope)
+    now += 16_000 // past the minimum fetch interval
     await provider.fetchRuns(emptyScope)
     expect(orgCalls).toBe(2)
   })
@@ -263,9 +266,11 @@ describe("BuildkiteProvider pipeline index caching", () => {
 
   test("does not cache a failed index fetch", async () => {
     let indexCalls = 0
+    let now = 0
     const provider = new BuildkiteProvider({
       token: "good",
       org: "acme",
+      now: () => now,
       fetch: async (url: string) => {
         if (url.includes("/pipelines?")) {
           indexCalls++
@@ -276,6 +281,7 @@ describe("BuildkiteProvider pipeline index caching", () => {
     })
 
     await provider.fetchRuns({ repositories: ["inetalliance/usm"], organizations: [] })
+    now += 16_000 // past the minimum fetch interval
     await provider.fetchRuns({ repositories: ["inetalliance/usm"], organizations: [] })
     expect(indexCalls).toBe(2)
   })
@@ -361,7 +367,7 @@ describe("BuildkiteProvider.fetchRuns endpoint selection", () => {
     const result = await provider.fetchRuns(emptyScope)
 
     expect(result.runs).toHaveLength(1)
-    expect(requestedUrls.some((u) => u.includes("/organizations/acme/builds?per_page=20"))).toBe(
+    expect(requestedUrls.some((u) => u.includes("/organizations/acme/builds?per_page=100"))).toBe(
       true,
     )
     expect(requestedUrls.some((u) => u.includes("/pipelines"))).toBe(false)
@@ -544,7 +550,7 @@ describe("BuildkiteProvider.fetchRuns error handling", () => {
     expect(result.runs).toEqual([])
     expect(result.diagnostics[0].level).toBe("error")
     expect(result.diagnostics[0].message).toBe(
-      "Buildkite: HTTP 500 from /organizations/acme/builds?per_page=20",
+      "Buildkite: HTTP 500 from /organizations/acme/builds?per_page=100",
     )
   })
 
@@ -838,5 +844,213 @@ describe("BuildkiteProvider job list (Ruling 34)", () => {
     expect(jobs.map((j) => j.id)).toEqual(["build", "deploy", "lint"])
     expect(jobs.find((j) => j.id === "deploy")?.status).toBe("skipped")
     expect(jobs.find((j) => j.id === "lint")?.status).toBe("skipped")
+  })
+})
+
+// Ruling 35: the REST limit is 50 requests/minute per user, shared with every
+// other client on the token.
+describe("BuildkiteProvider request budget", () => {
+  function pipelineBuild(id: string, slug: string) {
+    return buildPayload(id, 1, {
+      pipeline: { slug, name: slug, repository: `git@github.com:acme/${slug}.git` },
+    })
+  }
+
+  test("3 slugs make exactly one org-wide request, filtered to those slugs", async () => {
+    const requestedUrls: string[] = []
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      pipelines: ["one", "two", "three"],
+      fetch: async (url: string) => {
+        requestedUrls.push(url)
+        return jsonResponse([
+          pipelineBuild("b1", "one"),
+          pipelineBuild("b2", "three"),
+          pipelineBuild("b3", "someone-elses"),
+        ])
+      },
+    })
+
+    const result = await provider.fetchRuns(emptyScope)
+
+    expect(requestedUrls).toEqual([
+      "https://api.buildkite.com/v2/organizations/acme/builds?per_page=100",
+    ])
+    expect(result.runs.map((r) => r.id)).toEqual(["b1", "b2"])
+  })
+
+  test("2 slugs make two per-pipeline requests", async () => {
+    const requestedUrls: string[] = []
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      pipelines: ["one", "two"],
+      fetch: async (url: string) => {
+        requestedUrls.push(url)
+        return jsonResponse([])
+      },
+    })
+
+    await provider.fetchRuns(emptyScope)
+
+    expect(requestedUrls).toEqual([
+      "https://api.buildkite.com/v2/organizations/acme/pipelines/one/builds?per_page=20",
+      "https://api.buildkite.com/v2/organizations/acme/pipelines/two/builds?per_page=20",
+    ])
+  })
+
+  test("calls 5s apart make one network fetch; calls 16s apart make two", async () => {
+    let requests = 0
+    let now = 1_000_000
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      now: () => now,
+      fetch: async () => {
+        requests++
+        return jsonResponse([buildPayload("b1", 1)])
+      },
+    })
+
+    const first = await provider.fetchRuns(emptyScope)
+    now += 5_000
+    const second = await provider.fetchRuns(emptyScope)
+    expect(requests).toBe(1)
+    expect(second).toEqual(first)
+
+    now += 11_000 // 16s after the first fetch began
+    await provider.fetchRuns(emptyScope)
+    expect(requests).toBe(2)
+  })
+
+  test("a 429 with RateLimit-User-Reset backs off for that long, keeping the last good runs", async () => {
+    let requests = 0
+    let now = 1_000_000
+    let throttle = false
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      now: () => now,
+      fetch: async () => {
+        requests++
+        if (throttle) {
+          return jsonResponse(
+            { message: "slow down" },
+            { status: 429, headers: { "RateLimit-User-Reset": "42", "RateLimit-Reset": "7" } },
+          )
+        }
+        return jsonResponse([buildPayload("good-build", 1)])
+      },
+    })
+
+    await provider.fetchRuns(emptyScope)
+    expect(requests).toBe(1)
+
+    throttle = true
+    now += 20_000
+    const limited = await provider.fetchRuns(emptyScope)
+    expect(requests).toBe(2)
+    expect(limited.runs.map((r) => r.id)).toEqual(["good-build"])
+    expect(limited.jobs?.size).toBe(1)
+    expect(limited.diagnostics).toEqual([
+      {
+        provider: "buildkite",
+        level: "error",
+        message: "Buildkite: rate limited — retrying in 42s",
+      },
+    ])
+    expect(limited.diagnostics[0].message).not.toContain("rejected")
+
+    // 20s into the 42s backoff: no request, still the last good runs.
+    now += 20_000
+    const during = await provider.fetchRuns(emptyScope)
+    expect(requests).toBe(2)
+    expect(during.runs.map((r) => r.id)).toEqual(["good-build"])
+    expect(during.diagnostics).toHaveLength(1)
+    expect(during.diagnostics[0].message).toBe("Buildkite: rate limited — retrying in 22s")
+
+    // 41.5s in: still backing off (22s rounded up from the remaining 0.5s → 1s).
+    now += 21_500
+    const almost = await provider.fetchRuns(emptyScope)
+    expect(requests).toBe(2)
+    expect(almost.diagnostics[0].message).toBe("Buildkite: rate limited — retrying in 1s")
+
+    // After the reset: requests resume.
+    throttle = false
+    now += 1_000
+    const resumed = await provider.fetchRuns(emptyScope)
+    expect(requests).toBe(3)
+    expect(resumed.diagnostics).toEqual([])
+  })
+
+  test("a 429 with only RateLimit-Reset uses it", async () => {
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      now: () => 0,
+      fetch: async () =>
+        jsonResponse({ reset: 99 }, { status: 429, headers: { "RateLimit-Reset": "30" } }),
+    })
+
+    const result = await provider.fetchRuns(emptyScope)
+    expect(result.diagnostics[0].message).toBe("Buildkite: rate limited — retrying in 30s")
+  })
+
+  test("a 429 with no reset header falls back to the body's reset field", async () => {
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      now: () => 0,
+      fetch: async () => jsonResponse({ message: "limited", reset: 17 }, { status: 429 }),
+    })
+
+    const result = await provider.fetchRuns(emptyScope)
+    expect(result.diagnostics).toHaveLength(1)
+    expect(result.diagnostics[0].message).toBe("Buildkite: rate limited — retrying in 17s")
+  })
+
+  test("a 429 that names no reset time backs off for 60s", async () => {
+    let requests = 0
+    let now = 0
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      now: () => now,
+      fetch: async () => {
+        requests++
+        return new Response("", { status: 429 })
+      },
+    })
+
+    const result = await provider.fetchRuns(emptyScope)
+    expect(result.runs).toEqual([])
+    expect(result.diagnostics[0].message).toBe("Buildkite: rate limited — retrying in 60s")
+
+    now += 59_000
+    await provider.fetchRuns(emptyScope)
+    expect(requests).toBe(1)
+
+    now += 2_000
+    await provider.fetchRuns(emptyScope)
+    expect(requests).toBe(2)
+  })
+
+  test("a 429 on the first of two pipelines stops the second request", async () => {
+    const requestedUrls: string[] = []
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      pipelines: ["one", "two"],
+      now: () => 0,
+      fetch: async (url: string) => {
+        requestedUrls.push(url)
+        return new Response("", { status: 429, headers: { "RateLimit-User-Reset": "5" } })
+      },
+    })
+
+    const result = await provider.fetchRuns(emptyScope)
+    expect(requestedUrls).toHaveLength(1)
+    expect(result.diagnostics).toHaveLength(1)
   })
 })
