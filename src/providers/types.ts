@@ -34,9 +34,11 @@ export interface CiProvider {
   rerun(run: Run): Promise<void>
   logs(run: Run): Promise<string>
   /**
-   * Runs older than `before`, newest first. Optional: not every provider can
-   * page backwards through history. A provider that omits it simply does not
+   * Runs older than `before`, newest first, with diagnostics for whatever the
+   * provider could not read — a rate-limited resurrect must not look like a
+   * resurrect that found nothing. Optional: not every provider can page
+   * backwards through history, and one that omits this simply does not
    * participate in resurrect.
    */
-  fetchOlderRuns?(scope: Scope, before: string, limit: number): Promise<Run[]>
+  fetchOlderRuns?(scope: Scope, before: string, limit: number): Promise<FetchResult>
 }

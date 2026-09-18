@@ -11,6 +11,15 @@ import type { DockerServiceStatus, Job, PullRequest, Run } from "./types.js"
 
 const execAsync = promisify(exec)
 
+/** Substitutions for the tests; production constructs every one of these. */
+export interface AppDependencies {
+  github?: GitHubProvider
+  providers?: CiProvider[]
+  dockerService?: DockerServiceManager
+  configManager?: ConfigManager
+  dashboard?: Dashboard
+}
+
 export class App {
   // Pull requests and repository listing are GitHub-only concerns that are not
   // on CiProvider, so the GitHub provider is also held by its concrete type.
@@ -32,12 +41,14 @@ export class App {
   private dockerServices: DockerServiceStatus[] = []
   private oldestWorkflowTimestamp?: string // Track the oldest workflow timestamp for resurrect feature
 
-  constructor() {
-    this.github = new GitHubProvider()
-    this.providers = [this.github]
-    this.dockerService = new DockerServiceManager()
-    this.configManager = new ConfigManager()
-    this.dashboard = new Dashboard()
+  constructor(deps: AppDependencies = {}) {
+    this.github = deps.github ?? new GitHubProvider()
+    this.providers = deps.providers ?? [this.github]
+    this.dockerService = deps.dockerService ?? new DockerServiceManager()
+    this.configManager = deps.configManager ?? new ConfigManager()
+    // Constructing a Dashboard takes the terminal, so a caller that supplies
+    // one (the tests) must be able to keep that from happening.
+    this.dashboard = deps.dashboard ?? new Dashboard()
   }
 
   async initialize(args: {
@@ -600,7 +611,11 @@ export class App {
       const olderWorkflows: Run[] = []
       for (const provider of this.providers) {
         if (!provider.fetchOlderRuns) continue
-        olderWorkflows.push(...(await provider.fetchOlderRuns(scope, before, 1)))
+        const result = await provider.fetchOlderRuns(scope, before, 1)
+        olderWorkflows.push(...result.runs)
+        for (const diagnostic of result.diagnostics) {
+          this.dashboard.log(diagnostic.message, diagnostic.level === "error" ? "error" : "info")
+        }
       }
       olderWorkflows.sort(
         (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),

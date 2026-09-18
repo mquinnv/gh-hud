@@ -8,12 +8,29 @@ import {
 } from "./github-map.js"
 import type { CiProvider, FetchResult, ProviderDiagnostic, Scope } from "./types.js"
 
+/**
+ * The one way this provider reaches the outside world. A seam, so tests can
+ * exercise the mapping and the diagnostics without a network or a `gh` binary.
+ */
+export type CommandRunner = (
+  file: string,
+  args: string[],
+  options?: { timeout?: number },
+) => Promise<{ stdout: string }>
+
+const runWithExeca: CommandRunner = async (file, args, options) => {
+  const { stdout } = await execa(file, args, options)
+  return { stdout }
+}
+
 export class GitHubProvider implements CiProvider {
   readonly name = "github"
 
   private cache: Map<string, { data: unknown; timestamp: number }> = new Map()
   private cacheTimeout = 5000 // 5 seconds
   private limit = 20
+
+  constructor(private readonly run: CommandRunner = runWithExeca) {}
 
   async listRepositories(org?: string): Promise<Repository[]> {
     try {
@@ -22,7 +39,7 @@ export class GitHubProvider implements CiProvider {
         args.push(org)
       }
 
-      const { stdout } = await execa("gh", args, { timeout: 10000 })
+      const { stdout } = await this.run("gh", args, { timeout: 10000 })
       const repos = JSON.parse(stdout)
 
       return repos.map((repo: { owner: { login: string }; name: string }) => ({
@@ -52,7 +69,7 @@ export class GitHubProvider implements CiProvider {
         continue
       }
       try {
-        const { stdout } = await execa(
+        const { stdout } = await this.run(
           "gh",
           ["api", `repos/${repo}/actions/runs?per_page=${this.limit}`],
           { timeout: 10000 },
@@ -62,20 +79,7 @@ export class GitHubProvider implements CiProvider {
         this.setCache(cacheKey, mapped)
         runs.push(...mapped)
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        if (message.includes("API rate limit exceeded")) {
-          diagnostics.push({
-            provider: "github",
-            level: "error",
-            message: "GitHub: API rate limit exceeded",
-          })
-        } else {
-          diagnostics.push({
-            provider: "github",
-            level: "error",
-            message: `GitHub: could not list runs for ${repo}`,
-          })
-        }
+        diagnostics.push(this.diagnose(error, `GitHub: could not list runs for ${repo}`))
       }
     }
 
@@ -91,9 +95,13 @@ export class GitHubProvider implements CiProvider {
 
     try {
       // The API, not `gh run view`, because only the API reports the runner.
-      const { stdout } = await execa("gh", ["api", `repos/${repo}/actions/runs/${run.id}/jobs`], {
-        timeout: 10000,
-      })
+      const { stdout } = await this.run(
+        "gh",
+        ["api", `repos/${repo}/actions/runs/${run.id}/jobs`],
+        {
+          timeout: 10000,
+        },
+      )
 
       const payload = JSON.parse(stdout) as { jobs?: GitHubJobPayload[] }
       const jobs = (payload.jobs ?? []).map((raw) => mapGitHubJob(raw, run.key))
@@ -107,19 +115,21 @@ export class GitHubProvider implements CiProvider {
   }
 
   async cancel(run: Run): Promise<void> {
-    await execa("gh", ["run", "cancel", run.id, "-R", run.repo.fullName], { timeout: 10000 })
+    await this.run("gh", ["run", "cancel", run.id, "-R", run.repo.fullName], { timeout: 10000 })
   }
 
   async rerun(run: Run): Promise<void> {
-    await execa("gh", ["run", "rerun", run.id, "-R", run.repo.fullName], { timeout: 10000 })
+    await this.run("gh", ["run", "rerun", run.id, "-R", run.repo.fullName], { timeout: 10000 })
   }
 
   async logs(run: Run): Promise<string> {
-    const { stdout } = await execa(
+    // `gh run view --log` downloads and unzips the whole log archive, which on a
+    // large run takes appreciably longer than a plain API read.
+    const { stdout } = await this.run(
       "gh",
       ["run", "view", run.id, "-R", run.repo.fullName, "--log"],
       {
-        timeout: 30000,
+        timeout: 60000,
       },
     )
     return stdout
@@ -130,26 +140,40 @@ export class GitHubProvider implements CiProvider {
    * the cache is keyed by repository, and a page of older runs must not
    * displace the page of current ones the grid is built from.
    */
-  async fetchOlderRuns(scope: Scope, before: string, limit = 1): Promise<Run[]> {
+  async fetchOlderRuns(scope: Scope, before: string, limit = 1): Promise<FetchResult> {
     const runs: Run[] = []
+    const diagnostics: ProviderDiagnostic[] = []
 
     for (const repo of scope.repositories) {
       try {
         const created = encodeURIComponent(`<${before}`)
-        const { stdout } = await execa(
+        const { stdout } = await this.run(
           "gh",
           ["api", `repos/${repo}/actions/runs?per_page=${limit}&created=${created}`],
           { timeout: 10000 },
         )
         const payload = JSON.parse(stdout) as { workflow_runs: GitHubRunPayload[] }
         runs.push(...(payload.workflow_runs ?? []).map(mapGitHubRun))
-      } catch (_error) {
-        // Skip repositories we can't read; the others still contribute.
+      } catch (error) {
+        // Say so: "no older runs" and "could not look" must not read alike.
+        diagnostics.push(this.diagnose(error, `GitHub: could not list older runs for ${repo}`))
       }
     }
 
     runs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    return runs.slice(0, limit)
+    return { runs: runs.slice(0, limit), diagnostics }
+  }
+
+  /** A rate limit is worth naming; anything else is reported against the repo. */
+  private diagnose(error: unknown, fallback: string): ProviderDiagnostic {
+    const message = error instanceof Error ? error.message : String(error)
+    return {
+      provider: "github",
+      level: "error",
+      message: message.includes("API rate limit exceeded")
+        ? "GitHub: API rate limit exceeded"
+        : fallback,
+    }
   }
 
   private getFromCache<T>(key: string): T | null {
@@ -182,7 +206,7 @@ export class GitHubProvider implements CiProvider {
     if (cached) return cached
 
     try {
-      const { stdout } = await execa(
+      const { stdout } = await this.run(
         "gh",
         [
           "pr",

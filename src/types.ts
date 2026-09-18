@@ -11,7 +11,10 @@ export interface Step {
 }
 
 export interface Job {
+  /** Native id as a string. Unique only within a provider. */
   id: string
+  /** Stable cross-provider identity: `${runKey}:${id}`. */
+  key: string
   runKey: string
   name: string
   status: RunStatus

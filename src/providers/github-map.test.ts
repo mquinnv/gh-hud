@@ -52,6 +52,20 @@ describe("mapGitHubRun", () => {
   test("defaults isFailing to false", () => {
     expect(mapGitHubRun(rawRun).isFailing).toBe(false)
   })
+
+  // GitHub has no finished_at; updated_at is the last write to the run, which
+  // for one that has reached a verdict is when it finished. The card needs it
+  // to show a duration instead of counting up forever.
+  test("takes finishedAt from updated_at once the run has a verdict", () => {
+    const run = mapGitHubRun(rawRun)
+    expect(run.status).toBe("passed")
+    expect(run.finishedAt).toBe(rawRun.updated_at)
+  })
+
+  test("leaves finishedAt unset while the run is still going", () => {
+    const inFlight = { ...rawRun, status: "in_progress", conclusion: null }
+    expect(mapGitHubRun(inFlight).finishedAt).toBeUndefined()
+  })
 })
 
 describe("mapGitHubJob", () => {
@@ -61,6 +75,16 @@ describe("mapGitHubJob", () => {
     expect(job.id).toBe(String(rawJob.id))
     expect(job.name).toBe(rawJob.name)
     expect(Array.isArray(job.steps)).toBe(true)
+  })
+
+  // Job ids collide across providers exactly as run ids do, and the dashboard
+  // tracks expanded jobs in one set shared by every card on screen.
+  test("gives the job a key that is unique across providers", () => {
+    const job = mapGitHubJob(rawJob, "github:acme/widgets:1")
+    expect(job.key).toBe(`github:acme/widgets:1:${rawJob.id}`)
+
+    const sameIdElsewhere = mapGitHubJob(rawJob, "buildkite:acme/widgets:1")
+    expect(sameIdElsewhere.key).not.toBe(job.key)
   })
 
   test("leaves the Buildkite-only fields unset", () => {
@@ -74,6 +98,7 @@ describe("applyIsFailing", () => {
   const base = mapGitHubRun(rawRun)
   const job = (status: Job["status"]): Job => ({
     id: "j",
+    key: `${base.key}:j`,
     runKey: base.key,
     name: "n",
     status,

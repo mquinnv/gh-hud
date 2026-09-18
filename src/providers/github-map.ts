@@ -55,6 +55,7 @@ export function mapGitHubRun(raw: GitHubRunPayload): Run {
   const [owner, name] = fullName.split("/")
   const id = String(raw.id)
   const commitMessage = raw.head_commit?.message
+  const status = fromGitHub(raw.status, raw.conclusion)
 
   return {
     provider: "github",
@@ -65,7 +66,7 @@ export function mapGitHubRun(raw: GitHubRunPayload): Run {
     pipeline: raw.name ?? "",
     branch: raw.head_branch,
     sha: raw.head_sha,
-    status: fromGitHub(raw.status, raw.conclusion),
+    status,
     isFailing: false,
     repo: { owner, name, fullName },
     actor: raw.actor?.login,
@@ -74,7 +75,9 @@ export function mapGitHubRun(raw: GitHubRunPayload): Run {
     webUrl: raw.html_url,
     createdAt: raw.created_at,
     startedAt: raw.run_started_at ?? undefined,
-    finishedAt: undefined,
+    // GitHub has no finished_at; updated_at is the last write, which for a run
+    // that has reached a verdict is when it finished.
+    finishedAt: isTerminal(status) ? raw.updated_at : undefined,
   }
 }
 
@@ -89,8 +92,11 @@ function mapStep(raw: GitHubStepPayload): Step {
 }
 
 export function mapGitHubJob(raw: GitHubJobPayload, runKey: string): Job {
+  const id = String(raw.id)
+
   return {
-    id: String(raw.id),
+    id,
+    key: `${runKey}:${id}`,
     runKey,
     name: raw.name,
     status: fromGitHub(raw.status, raw.conclusion),

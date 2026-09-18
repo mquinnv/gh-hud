@@ -1,3 +1,4 @@
+import type { Duplex } from "node:stream"
 import blessed from "blessed"
 import * as fs from "fs"
 import * as os from "os"
@@ -57,11 +58,11 @@ export class Dashboard {
   private lastRefreshTime?: Date // Track when data was actually refreshed
   private lastStatusLine1 = "" // Cache last status line to avoid re-rendering
   private lastStatusLine2 = "" // Cache last status line to avoid re-rendering
-  private expandedJobs: Set<string> = new Set() // Track which job IDs are expanded (default is collapsed)
+  private expandedJobs: Set<string> = new Set() // Expanded jobs, by Job.key (collapsed is the default)
   private zoomedMode = false // Track if a workflow is zoomed to full screen
   private zoomedWorkflowIndex = 0 // Track which workflow is zoomed
 
-  constructor() {
+  constructor(streams?: { input: Duplex; output: Duplex }) {
     // Load saved preferences
     this.loadPreferences()
 
@@ -77,8 +78,11 @@ export class Dashboard {
       keys: true,
       vi: false,
       mouse: true, // Enable mouse support for scrolling
-      input: process.stdin,
-      output: process.stdout,
+      // Production never passes `streams`, so this is process.stdin/stdout as
+      // before. Tests pass a throwaway PassThrough pair so blessed never
+      // touches the real terminal (never switches to the alternate screen).
+      input: streams?.input ?? process.stdin,
+      output: streams?.output ?? process.stdout,
       terminal: "xterm-color", // Force xterm-color to avoid Setulc
       forceUnicode: true,
       fastCSR: true, // Use fast CSR to reduce flickering
@@ -1771,14 +1775,16 @@ Press '?', '/', or 'Esc' to close...`,
       lines.push(` {#888888-fg}Press 'd' to dismiss{/#888888-fg}`)
     }
 
-    // Timing information
+    // Timing information. A finished run has an end; an in-flight one is
+    // measured against now.
     if (run.startedAt) {
       const startTime = new Date(run.startedAt)
-      const now = new Date()
-      const duration = Math.floor((now.getTime() - startTime.getTime()) / 1000)
+      const endTime = run.finishedAt ? new Date(run.finishedAt) : new Date()
+      const duration = Math.floor((endTime.getTime() - startTime.getTime()) / 1000)
       const minutes = Math.floor(duration / 60)
       const seconds = duration % 60
-      lines.push(` Running: {white-fg}${minutes}m ${seconds}s{/white-fg}`)
+      const label = run.finishedAt ? "Duration" : "Running"
+      lines.push(` ${label}: {white-fg}${minutes}m ${seconds}s{/white-fg}`)
     }
 
     if (run.createdAt !== run.startedAt) {
@@ -1840,7 +1846,7 @@ Press '?', '/', or 'Esc' to close...`,
 
           // Show completion info for finished jobs
           else if (isTerminal(job.status)) {
-            const isExpanded = this.expandedJobs.has(job.id)
+            const isExpanded = this.expandedJobs.has(job.key)
 
             if (!isExpanded) {
               // Only show detail for failed jobs (which step failed)
@@ -2099,7 +2105,7 @@ Press '?', '/', or 'Esc' to close...`,
         if (hasCompletedJobs) {
           // Check if any jobs are expanded to show appropriate action
           const anyExpanded = workflowJobs?.some(
-            (job) => isTerminal(job.status) && this.expandedJobs.has(job.id),
+            (job) => isTerminal(job.status) && this.expandedJobs.has(job.key),
           )
           shortcuts.push(anyExpanded ? "j: collapse steps" : "j: expand steps")
         }
@@ -2749,18 +2755,18 @@ Press '?', '/', or 'Esc' to close...`,
     if (completedJobs.length === 0) return
 
     // Check if any completed jobs are currently expanded (since collapsed is default)
-    const anyExpanded = completedJobs.some((job) => this.expandedJobs.has(job.id))
+    const anyExpanded = completedJobs.some((job) => this.expandedJobs.has(job.key))
 
     if (anyExpanded) {
       // Collapse all completed jobs for this run (remove from expanded set)
       completedJobs.forEach((job) => {
-        this.expandedJobs.delete(job.id)
+        this.expandedJobs.delete(job.key)
       })
       this.log("Collapsed job steps for completed jobs", "info")
     } else {
       // Expand all completed jobs for this run (add to expanded set)
       completedJobs.forEach((job) => {
-        this.expandedJobs.add(job.id)
+        this.expandedJobs.add(job.key)
       })
       this.log("Expanded job steps for completed jobs", "info")
     }
