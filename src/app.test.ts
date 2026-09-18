@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { mkdtempSync } from "fs"
+import { tmpdir } from "os"
+import { join } from "path"
 import { App } from "./app.js"
 import { ConfigManager } from "./config.js"
 import type { Dashboard } from "./dashboard.js"
@@ -183,6 +186,22 @@ function bkBuild(state: string, jobs: Array<Record<string, unknown>>, id = "b1")
     jobs,
   }
 }
+
+/**
+ * A real ConfigManager that reads from a fresh temp directory and a fresh temp
+ * home — never the developer's cwd or `~/.ops-hud.json`.
+ */
+class IsolatedConfigManager extends ConfigManager {
+  private readonly base = mkdtempSync(join(tmpdir(), "ops-hud-app-base-"))
+  private readonly home = mkdtempSync(join(tmpdir(), "ops-hud-app-home-"))
+
+  override loadConfig(configPath?: string) {
+    return super.loadConfig(configPath, this.base, this.home)
+  }
+}
+
+/** A Buildkite stand-in for initialize(): never constructs the real provider. */
+const stubBuildkite = (): CiProvider => new FakeProvider("buildkite")
 
 const visibleKeys = (rendered: Array<{ runs: Run[] }>): string[] =>
   (rendered.at(-1)?.runs ?? []).map((run) => run.key)
@@ -401,6 +420,57 @@ describe("multiple providers", () => {
     expect(providerFor(theirs)).toBe(buildkite)
   })
 
+  // Ruling 36: a steady diagnostic must not flood the 100-line log buffer.
+  test("the same diagnostic over three refreshes is logged once", async () => {
+    const diagnostic = {
+      provider: "buildkite",
+      level: "info" as const,
+      message: "Buildkite: skipped",
+    }
+    const provider = new FakeProvider("buildkite", [], new Map(), false, [diagnostic])
+    const { internals, logs } = makeApp([provider])
+
+    await internals.performRefresh()
+    await internals.performRefresh()
+    await internals.performRefresh()
+
+    expect(logs.filter((line) => line === "Buildkite: skipped")).toHaveLength(1)
+  })
+
+  test("a changed diagnostic is logged when it changes", async () => {
+    const diagnostics: FetchResult["diagnostics"] = [
+      { provider: "buildkite", level: "error", message: "Buildkite: HTTP 500" },
+    ]
+    const provider = new FakeProvider("buildkite", [], new Map(), false, diagnostics)
+    const { internals, logs } = makeApp([provider])
+
+    await internals.performRefresh()
+    diagnostics[0] = { provider: "buildkite", level: "error", message: "Buildkite: HTTP 502" }
+    await internals.performRefresh()
+    await internals.performRefresh()
+
+    expect(logs.filter((line) => line.startsWith("Buildkite: HTTP"))).toEqual([
+      "Buildkite: HTTP 500",
+      "Buildkite: HTTP 502",
+    ])
+  })
+
+  test("a diagnostic that disappears and returns is logged again", async () => {
+    const diagnostics: FetchResult["diagnostics"] = [
+      { provider: "buildkite", level: "error", message: "Buildkite: HTTP 500" },
+    ]
+    const provider = new FakeProvider("buildkite", [], new Map(), false, diagnostics)
+    const { internals, logs } = makeApp([provider])
+
+    await internals.performRefresh()
+    diagnostics.pop()
+    await internals.performRefresh()
+    diagnostics.push({ provider: "buildkite", level: "error", message: "Buildkite: HTTP 500" })
+    await internals.performRefresh()
+
+    expect(logs.filter((line) => line === "Buildkite: HTTP 500")).toHaveLength(2)
+  })
+
   test("a provider's diagnostics reach the log pane", async () => {
     const provider = new FakeProvider("github", [], new Map(), false, [
       { provider: "github", level: "error", message: "GitHub: API rate limit exceeded" },
@@ -614,7 +684,7 @@ describe("initialize() and injected providers", () => {
   test("providers injected through AppDependencies survive initialize() untouched", async () => {
     const provider = new FakeProvider("acme-ci", [])
     const { dashboard } = makeDashboard()
-    const configManager = new ConfigManager()
+    const configManager = new IsolatedConfigManager()
     let buildkiteFactoryCalls = 0
     const app = new App({
       providers: [provider],
@@ -637,18 +707,32 @@ describe("initialize() and injected providers", () => {
 })
 
 describe("--no-github disables GitHub CI runs only (Ruling 26)", () => {
+  // Nothing here may reach the developer's environment: a BUILDKITE_API_TOKEN
+  // exported in the shell (the README says to) must not turn `bun test` into
+  // real API traffic.
+  const originalToken = process.env.BUILDKITE_API_TOKEN
+  beforeEach(() => {
+    delete process.env.BUILDKITE_API_TOKEN
+  })
+  afterEach(() => {
+    if (originalToken === undefined) delete process.env.BUILDKITE_API_TOKEN
+    else process.env.BUILDKITE_API_TOKEN = originalToken
+  })
+
   test("repository resolution and PR fetching still go through the GitHub provider", async () => {
     const { dashboard } = makeDashboard()
-    const configManager = new ConfigManager()
+    const configManager = new IsolatedConfigManager()
     let getAllPullRequestsCalls = 0
+    const listedOrgs: string[] = []
     const fakeGithub = {
       name: "github",
       async getAllPullRequests(_repos: string[]) {
         getAllPullRequestsCalls++
         return []
       },
-      async listRepositories() {
-        return []
+      async listRepositories(org: string) {
+        listedOrgs.push(org)
+        return [{ owner: "acme", name: "widgets", fullName: "acme/widgets" }]
       },
     } as unknown as GitHubProvider
 
@@ -656,22 +740,22 @@ describe("--no-github disables GitHub CI runs only (Ruling 26)", () => {
       github: fakeGithub,
       dashboard,
       configManager,
-      // Buildkite is left to build for real off empty config — no token in
-      // this environment, so it silently skips with an info diagnostic and
-      // makes no request.
+      buildkiteFactory: stubBuildkite,
     })
 
     await app.initialize({
-      repositories: ["acme/widgets"],
+      organizations: ["acme"],
       showPRs: true,
       noGithub: true,
     })
     const internals = app as unknown as AppInternals
 
     // GitHub is excluded from the CI provider list...
-    expect(internals.providers.map((p) => p.name)).not.toContain("github")
-    // ...but PR fetching (governed by --show-prs, not --no-github) still
-    // went through the same GitHub provider instance.
+    expect(internals.providers.map((p) => p.name)).toEqual(["buildkite"])
+    // ...but repository resolution still went through the GitHub provider...
+    expect(listedOrgs).toEqual(["acme"])
+    expect(internals.repositories).toEqual(["acme/widgets"])
+    // ...and so did PR fetching (governed by --show-prs, not --no-github).
     expect(getAllPullRequestsCalls).toBeGreaterThan(0)
 
     app.stop()

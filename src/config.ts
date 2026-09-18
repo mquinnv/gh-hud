@@ -16,14 +16,19 @@ export function parseGitHubRemote(url: string): string | null {
   return match ? `${match[1]}/${match[2]}` : null
 }
 
+/** Runs `gh` in a directory and returns stdout. A seam so tests never call the real `gh`. */
+export type GhRunner = (args: string[], cwd: string) => Promise<string>
+
+const runGh: GhRunner = async (args, cwd) => {
+  const { stdout } = await execa("gh", args, { cwd, timeout: 2000 })
+  return stdout
+}
+
 // Resolve the GitHub repository that owns `dir`, or null if there isn't one.
-export async function resolveRepoAtPath(dir: string): Promise<string | null> {
+export async function resolveRepoAtPath(dir: string, gh: GhRunner = runGh): Promise<string | null> {
   try {
     // gh knows about renames and non-origin remotes, so prefer it.
-    const { stdout } = await execa("gh", ["repo", "view", "--json", "owner,name"], {
-      cwd: dir,
-      timeout: 2000,
-    })
+    const stdout = await gh(["repo", "view", "--json", "owner,name"], dir)
     const repoInfo = JSON.parse(stdout)
     if (repoInfo.owner?.login && repoInfo.name) {
       return `${repoInfo.owner.login}/${repoInfo.name}`
@@ -43,14 +48,17 @@ export async function resolveRepoAtPath(dir: string): Promise<string | null> {
 // Turn a user-supplied path into the repository to monitor. Throws with a
 // message meant for stderr — the caller must fail before blessed takes the
 // screen, or the error becomes an invisible empty dashboard.
-export async function resolveScope(path: string): Promise<{ repo: string; dir: string }> {
+export async function resolveScope(
+  path: string,
+  gh: GhRunner = runGh,
+): Promise<{ repo: string; dir: string }> {
   const dir = resolve(path)
 
   if (!existsSync(dir)) {
     throw new Error(`No such directory: ${dir}`)
   }
 
-  const repo = await resolveRepoAtPath(dir)
+  const repo = await resolveRepoAtPath(dir, gh)
   if (!repo) {
     throw new Error(`Not a GitHub checkout (no github.com remote found): ${dir}`)
   }
@@ -71,17 +79,25 @@ const DEFAULT_CONFIG: Config = {
 export class ConfigManager {
   private config: Config = { ...DEFAULT_CONFIG }
 
-  async loadConfig(configPath?: string, baseDir: string = process.cwd()): Promise<Config> {
+  /**
+   * `homeDir` is a seam for the tests, which must never read the developer's
+   * real `~/.ops-hud.json`.
+   */
+  async loadConfig(
+    configPath?: string,
+    baseDir: string = process.cwd(),
+    homeDir: string = homedir(),
+  ): Promise<Config> {
     const paths = [
       configPath,
       join(baseDir, ".ops-hud.json"),
-      join(homedir(), ".ops-hud.json"),
-      join(homedir(), ".config", "ops-hud", "config.json"),
+      join(homeDir, ".ops-hud.json"),
+      join(homeDir, ".config", "ops-hud", "config.json"),
       // Legacy gh-hud locations, kept so the 2.0 rename doesn't silently drop
       // an existing user's configuration.
       join(baseDir, ".gh-hud.json"),
-      join(homedir(), ".gh-hud.json"),
-      join(homedir(), ".config", "gh-hud", "config.json"),
+      join(homeDir, ".gh-hud.json"),
+      join(homeDir, ".config", "gh-hud", "config.json"),
     ].filter(Boolean) as string[]
 
     for (const path of paths) {

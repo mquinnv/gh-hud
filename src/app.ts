@@ -61,6 +61,11 @@ export class App {
   // Diagnostics from the most recent refresh, surfaced in the dashboard's
   // empty-state panel when the grid has no cards at all.
   private lastDiagnostics: ProviderDiagnostic[] = []
+  // The diagnostic messages the previous refresh produced. A diagnostic is
+  // written to the event log only when it was not in that set, so a steady
+  // "no token — skipped" is logged once rather than every 5s, where it would
+  // push real events out of the log buffer.
+  private previousDiagnosticMessages: Set<string> = new Set()
 
   constructor(deps: AppDependencies = {}) {
     this.github = deps.github ?? new GitHubProvider()
@@ -504,10 +509,8 @@ export class App {
             providerJobs.set(key, jobs)
           }
         }
-        for (const diagnostic of result.diagnostics) {
-          this.dashboard.log(diagnostic.message, diagnostic.level === "error" ? "error" : "info")
-        }
       }
+      this.logChangedDiagnostics(results.flatMap((result) => result.diagnostics))
       allRuns.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
 
       // Kept for the empty-state panel: a Buildkite misconfiguration on a
@@ -611,6 +614,19 @@ export class App {
       // Stop the refresh animation
       this.dashboard.stopRefreshAnimation()
     }
+  }
+
+  /** Logs each diagnostic the previous refresh did not also produce. */
+  private logChangedDiagnostics(diagnostics: ProviderDiagnostic[]): void {
+    const current = new Set<string>()
+    for (const diagnostic of diagnostics) {
+      if (current.has(diagnostic.message)) continue
+      current.add(diagnostic.message)
+      if (!this.previousDiagnosticMessages.has(diagnostic.message)) {
+        this.dashboard.log(diagnostic.message, diagnostic.level === "error" ? "error" : "info")
+      }
+    }
+    this.previousDiagnosticMessages = current
   }
 
   private startAutoRefresh(): void {

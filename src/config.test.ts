@@ -7,6 +7,15 @@ import { ConfigManager, parseGitHubRemote, resolveRepoAtPath, resolveScope } fro
 import type { GitHubProvider } from "./providers/github.js"
 import type { Repository } from "./types.js"
 
+// `gh repo view` would ask the GitHub API about the remote; the tests exercise
+// the git-remote fallback instead and never run the real `gh`.
+const noGh = async (): Promise<string> => {
+  throw new Error("gh is not available in tests")
+}
+
+/** A fresh, empty home directory, so no test ever reads the developer's real config. */
+const freshHome = () => mkdtemp(join(tmpdir(), "ops-hud-home-"))
+
 // A GitHubProvider whose org listing returns a repo we should never see once
 // an explicit scope is in play — if it leaks into the result, orgs weren't cleared.
 function githubReturningOrgRepo(fullName: string): GitHubProvider {
@@ -64,13 +73,13 @@ describe("resolveRepoAtPath", () => {
     await execa("git", ["init", "-q"], { cwd: dir })
     await execa("git", ["remote", "add", "origin", "git@github.com:acme/widgets.git"], { cwd: dir })
 
-    expect(await resolveRepoAtPath(dir)).toBe("acme/widgets")
+    expect(await resolveRepoAtPath(dir, noGh)).toBe("acme/widgets")
   })
 
   test("returns null for a directory that is not a git checkout", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ops-hud-test-"))
 
-    expect(await resolveRepoAtPath(dir)).toBeNull()
+    expect(await resolveRepoAtPath(dir, noGh)).toBeNull()
   })
 })
 
@@ -80,7 +89,7 @@ describe("resolveScope", () => {
     await execa("git", ["init", "-q"], { cwd: dir })
     await execa("git", ["remote", "add", "origin", "git@github.com:acme/widgets.git"], { cwd: dir })
 
-    const scope = await resolveScope(dir)
+    const scope = await resolveScope(dir, noGh)
 
     expect(scope.repo).toBe("acme/widgets")
     expect(isAbsolute(scope.dir)).toBe(true)
@@ -89,13 +98,13 @@ describe("resolveScope", () => {
   test("rejects a path that does not exist, naming the path", async () => {
     const missing = join(tmpdir(), "ops-hud-test-does-not-exist")
 
-    expect(resolveScope(missing)).rejects.toThrow(missing)
+    expect(resolveScope(missing, noGh)).rejects.toThrow(missing)
   })
 
   test("rejects a directory that has no GitHub remote", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ops-hud-test-"))
 
-    expect(resolveScope(dir)).rejects.toThrow(/GitHub/)
+    expect(resolveScope(dir, noGh)).rejects.toThrow(/GitHub/)
   })
 })
 
@@ -106,7 +115,7 @@ describe("config path migration", () => {
     const dir = await mkdtemp(join(tmpdir(), "ops-hud-"))
     await writeFile(join(dir, ".gh-hud.json"), JSON.stringify({ maxWorkflows: 7 }))
     const manager = new ConfigManager()
-    await manager.loadConfig(undefined, dir)
+    await manager.loadConfig(undefined, dir, await freshHome())
     expect(manager.maxWorkflows).toBe(7)
   })
 
@@ -115,7 +124,27 @@ describe("config path migration", () => {
     await writeFile(join(dir, ".gh-hud.json"), JSON.stringify({ maxWorkflows: 7 }))
     await writeFile(join(dir, ".ops-hud.json"), JSON.stringify({ maxWorkflows: 9 }))
     const manager = new ConfigManager()
-    await manager.loadConfig(undefined, dir)
+    await manager.loadConfig(undefined, dir, await freshHome())
     expect(manager.maxWorkflows).toBe(9)
+  })
+})
+
+describe("config home directory", () => {
+  test("home-relative paths resolve against the given home, not the real one", async () => {
+    const base = await mkdtemp(join(tmpdir(), "ops-hud-"))
+    const home = await freshHome()
+    await writeFile(join(home, ".ops-hud.json"), JSON.stringify({ maxWorkflows: 11 }))
+    const manager = new ConfigManager()
+    await manager.loadConfig(undefined, base, home)
+    expect(manager.maxWorkflows).toBe(11)
+  })
+
+  test("a legacy file in the given home is read when nothing newer exists", async () => {
+    const base = await mkdtemp(join(tmpdir(), "ops-hud-"))
+    const home = await freshHome()
+    await writeFile(join(home, ".gh-hud.json"), JSON.stringify({ maxWorkflows: 13 }))
+    const manager = new ConfigManager()
+    await manager.loadConfig(undefined, base, home)
+    expect(manager.maxWorkflows).toBe(13)
   })
 })
