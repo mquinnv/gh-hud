@@ -18,6 +18,12 @@ interface WatchOptions {
   status?: string[]
   showPrs?: boolean
   showDocker?: boolean
+  bkOrg?: string
+  pipeline?: string[]
+  // Commander's `--no-X` convention: absent means true (the default), and
+  // `--no-buildkite`/`--no-github` set these to `false` explicitly.
+  buildkite?: boolean
+  github?: boolean
 }
 
 async function watch(path: string | undefined, options: WatchOptions): Promise<void> {
@@ -48,6 +54,10 @@ async function watch(path: string | undefined, options: WatchOptions): Promise<v
       showDocker: options.showDocker,
       scopedRepository,
       scopeDir,
+      noGithub: options.github === false,
+      noBuildkite: options.buildkite === false,
+      bkOrg: options.bkOrg,
+      pipelines: options.pipeline,
     })
   } catch (error) {
     // Write to stderr in a way that won't interfere with the UI
@@ -74,8 +84,10 @@ async function watch(path: string | undefined, options: WatchOptions): Promise<v
 }
 
 // Both the bare invocation and the explicit `watch` subcommand take the same
-// arguments, so register them from one place.
-function addWatchOptions(command: typeof program): typeof program {
+// arguments, so register them from one place. Exported so tests can attach a
+// harmless action to a throwaway Command and assert on the parsed options
+// without invoking `watch()` (which touches `gh`/git and the terminal).
+export function addWatchOptions(command: typeof program): typeof program {
   return command
     .argument(
       "[path]",
@@ -88,7 +100,10 @@ function addWatchOptions(command: typeof program): typeof program {
     .option("-s, --status <statuses...>", "Filter by status (queued, in_progress, completed)")
     .option("-p, --show-prs", "Show open pull requests in header")
     .option("-d, --show-docker", "Show Docker Compose service status in header")
-    .action(watch)
+    .option("--bk-org <org>", "Buildkite organization slug")
+    .option("--pipeline <slugs...>", "Buildkite pipeline slugs to watch")
+    .option("--no-buildkite", "Disable the Buildkite provider")
+    .option("--no-github", "Disable the GitHub provider")
 }
 
 program
@@ -96,9 +111,18 @@ program
   .description("GitHub workflow monitoring dashboard for terminal")
   .version(packageJson.version)
 
-addWatchOptions(program.command("watch").description("Watch GitHub workflows") as typeof program)
+addWatchOptions(
+  program.command("watch").description("Watch GitHub workflows") as typeof program,
+).action(watch)
 
 // Default command (same as watch)
-addWatchOptions(program)
+addWatchOptions(program).action(watch)
 
-program.parse()
+// Only parse real argv when this file is the entry point — an ESM
+// equivalent of `require.main === module`. Importing this module from a test
+// (to reach `addWatchOptions`) must not also run the CLI against the test
+// runner's own argv.
+const isMainModule = process.argv[1] === fileURLToPath(import.meta.url)
+if (isMainModule) {
+  program.parse()
+}

@@ -3,9 +3,14 @@ import { promisify } from "util"
 import { ConfigManager } from "./config.js"
 import { Dashboard } from "./dashboard.js"
 import { DockerServiceManager } from "./docker-utils.js"
+import {
+  BuildkiteProvider,
+  type BuildkiteProviderOptions,
+  resolveBuildkiteToken,
+} from "./providers/buildkite.js"
 import { GitHubProvider } from "./providers/github.js"
 import { applyIsFailing } from "./providers/github-map.js"
-import type { CiProvider, Scope } from "./providers/types.js"
+import type { CiProvider, ProviderDiagnostic, Scope } from "./providers/types.js"
 import { isActive } from "./status.js"
 import type { DockerServiceStatus, Job, PullRequest, Run } from "./types.js"
 
@@ -18,6 +23,11 @@ export interface AppDependencies {
   dockerService?: DockerServiceManager
   configManager?: ConfigManager
   dashboard?: Dashboard
+  /**
+   * Seam for observing what the Buildkite provider was constructed with,
+   * without touching the network. Production builds a real BuildkiteProvider.
+   */
+  buildkiteFactory?: (options: BuildkiteProviderOptions) => CiProvider
 }
 
 export class App {
@@ -26,6 +36,13 @@ export class App {
   // Nothing on the CI path may reach through this field.
   private github: GitHubProvider
   private providers: CiProvider[]
+  // True when AppDependencies.providers was supplied (the tests' seam). In
+  // that case initialize() must never overwrite the injected list with one
+  // built from config/flags. Recorded here, rather than inferred from array
+  // contents, so an injected empty array or a single-provider list is just as
+  // protected as any other.
+  private readonly providersInjected: boolean
+  private readonly buildkiteFactory: (options: BuildkiteProviderOptions) => CiProvider
   private dockerService: DockerServiceManager
   private configManager: ConfigManager
   private dashboard: Dashboard
@@ -40,10 +57,15 @@ export class App {
   private showDocker = false
   private dockerServices: DockerServiceStatus[] = []
   private oldestWorkflowTimestamp?: string // Track the oldest workflow timestamp for resurrect feature
+  // Diagnostics from the most recent refresh, surfaced in the dashboard's
+  // empty-state panel when the grid has no cards at all.
+  private lastDiagnostics: ProviderDiagnostic[] = []
 
   constructor(deps: AppDependencies = {}) {
     this.github = deps.github ?? new GitHubProvider()
+    this.providersInjected = deps.providers !== undefined
     this.providers = deps.providers ?? [this.github]
+    this.buildkiteFactory = deps.buildkiteFactory ?? ((options) => new BuildkiteProvider(options))
     this.dockerService = deps.dockerService ?? new DockerServiceManager()
     this.configManager = deps.configManager ?? new ConfigManager()
     // Constructing a Dashboard takes the terminal, so a caller that supplies
@@ -60,9 +82,20 @@ export class App {
     showDocker?: boolean
     scopedRepository?: string
     scopeDir?: string
+    noGithub?: boolean
+    noBuildkite?: boolean
+    bkOrg?: string
+    pipelines?: string[]
   }): Promise<void> {
     // Load configuration
     await this.configManager.loadConfig(args.config)
+
+    // Config is only known once loadConfig has run, so the provider list
+    // (which needs buildkite.token/org/pipelines) is built here, never in the
+    // constructor. Injected providers (the tests' seam) are never overwritten.
+    if (!this.providersInjected) {
+      this.providers = this.buildProviders(args)
+    }
 
     // A path argument or -r is a hard scope, not an addition to whatever the
     // config file happens to list — otherwise configured orgs widen it back out.
@@ -100,6 +133,34 @@ export class App {
 
     // Start auto-refresh
     this.startAutoRefresh()
+  }
+
+  /**
+   * Builds the CI provider list from config and CLI flags. `--no-github`
+   * disables GitHub *runs* only — `this.github` is kept regardless, for PRs
+   * and repository resolution, neither of which is on this list.
+   */
+  private buildProviders(args: {
+    noGithub?: boolean
+    noBuildkite?: boolean
+    bkOrg?: string
+    pipelines?: string[]
+  }): CiProvider[] {
+    const providers: CiProvider[] = []
+    if (!args.noGithub) {
+      providers.push(this.github)
+    }
+    if (!args.noBuildkite) {
+      const buildkiteConfig = this.configManager.buildkite
+      providers.push(
+        this.buildkiteFactory({
+          token: resolveBuildkiteToken(process.env, buildkiteConfig),
+          org: args.bkOrg ?? buildkiteConfig.org,
+          pipelines: args.pipelines ?? buildkiteConfig.pipelines,
+        }),
+      )
+    }
+    return providers
   }
 
   private setupEventHandlers(): void {
@@ -445,6 +506,10 @@ export class App {
       }
       allRuns.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
 
+      // Kept for the empty-state panel: a Buildkite misconfiguration on a
+      // checkout with no GitHub Actions runs must not look like idle CI.
+      this.lastDiagnostics = results.flatMap((result) => result.diagnostics)
+
       // Fetch PRs if requested
       if (this.showPRs) {
         this.pullRequests = await this.github.getAllPullRequests(this.repositories)
@@ -525,6 +590,7 @@ export class App {
         this.jobs,
         this.showPRs ? this.pullRequests : undefined,
         this.showDocker ? this.dockerServices : undefined,
+        this.lastDiagnostics,
       )
     } catch (error) {
       // Show error in dashboard
@@ -584,6 +650,7 @@ export class App {
       this.jobs,
       this.showPRs ? this.pullRequests : undefined,
       this.showDocker ? this.dockerServices : undefined,
+      this.lastDiagnostics,
     )
   }
 
@@ -645,6 +712,7 @@ export class App {
         this.jobs,
         this.showPRs ? this.pullRequests : undefined,
         this.showDocker ? this.dockerServices : undefined,
+        this.lastDiagnostics,
       )
 
       this.dashboard.log(

@@ -3,6 +3,7 @@ import blessed from "blessed"
 import * as fs from "fs"
 import * as os from "os"
 import * as path from "path"
+import type { ProviderDiagnostic } from "./providers/types.js"
 import { isActive, isTerminal, statusColor, statusIcon } from "./status.js"
 import type { DockerServiceStatus, Job, PullRequest, Run } from "./types.js"
 
@@ -61,6 +62,10 @@ export class Dashboard {
   private expandedJobs: Set<string> = new Set() // Expanded jobs, by Job.key (collapsed is the default)
   private zoomedMode = false // Track if a workflow is zoomed to full screen
   private zoomedWorkflowIndex = 0 // Track which workflow is zoomed
+  // Provider diagnostics from the most recent refresh — shown in the
+  // empty-state panel (a Buildkite failure must not look like idle CI) and
+  // never shown once the grid has cards.
+  private diagnostics: ProviderDiagnostic[] = []
 
   constructor(streams?: { input: Duplex; output: Duplex }) {
     // Load saved preferences
@@ -1311,6 +1316,7 @@ Press '?', '/', or 'Esc' to close...`,
     jobs: Map<string, Job[]>,
     pullRequests?: PullRequest[],
     dockerServices?: DockerServiceStatus[],
+    diagnostics?: ProviderDiagnostic[],
   ): void {
     // Don't update the display if a modal dialog is open
     if (this.modalOpen) {
@@ -1319,6 +1325,7 @@ Press '?', '/', or 'Esc' to close...`,
       this.pullRequests = pullRequests || []
       this.dockerServices = dockerServices || []
       this.jobsCache = jobs // Update the cache
+      this.diagnostics = diagnostics ?? []
       return
     }
 
@@ -1336,6 +1343,7 @@ Press '?', '/', or 'Esc' to close...`,
       this.showPRs = pullRequests !== undefined
       this.showDocker = dockerServices !== undefined
       this.jobsCache = jobs // Update the cache
+      this.diagnostics = diagnostics ?? []
 
       // Update debug info - now logged at trace level
       this.updateDebugInfo({
@@ -1374,8 +1382,15 @@ Press '?', '/', or 'Esc' to close...`,
         this.dockerHeaderBox = undefined
       }
 
-      // Only recreate layout if the number of workflows changed or grid doesn't exist
-      if (workflows.length !== previousWorkflowCount || this.grid.length === 0) {
+      // Only recreate layout if the number of workflows changed or grid doesn't exist.
+      // An empty grid is always rebuilt: diagnostics can change every refresh
+      // (e.g. a Buildkite token starts failing) while the workflow count stays
+      // at zero, and the empty-state panel must reflect the latest ones.
+      if (
+        workflows.length !== previousWorkflowCount ||
+        this.grid.length === 0 ||
+        workflows.length === 0
+      ) {
         this.layoutWorkflows()
       }
 
@@ -1518,7 +1533,20 @@ Press '?', '/', or 'Esc' to close...`,
       const topOffset = prHeaderHeight + dockerHeaderHeight // Offset for PR and Docker headers
 
       if (count === 0) {
-        // Show empty state
+        // Show empty state, plus why each provider contributed nothing — a
+        // Buildkite misconfiguration on a checkout with no GitHub Actions
+        // runs must not look like idle CI. Error diagnostics render in red,
+        // matching the event log's convention, so a rejected token is loud.
+        const diagnosticsBlock =
+          this.diagnostics.length > 0
+            ? `\n\n${this.diagnostics
+                .map((d) => {
+                  const color = d.level === "error" ? "red-fg" : "white-fg"
+                  return `{center}{${color}}${d.message}{/${color}}{/center}`
+                })
+                .join("\n")}`
+            : ""
+
         const emptyBox = blessed.box({
           parent: this.screen,
           top: topOffset,
@@ -1531,7 +1559,7 @@ Press '?', '/', or 'Esc' to close...`,
 {center}Press 'r' to refresh or 'q' to quit{/center}
 
 {center}Completed workflows will be shown until dismissed{/center}
-{center}To see activity, trigger a workflow in your repositories{/center}`,
+{center}To see activity, trigger a workflow in your repositories{/center}${diagnosticsBlock}`,
           tags: true,
           border: {
             type: "line",

@@ -1,9 +1,11 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { App } from "./app.js"
+import { ConfigManager } from "./config.js"
 import type { Dashboard } from "./dashboard.js"
+import type { BuildkiteProviderOptions } from "./providers/buildkite.js"
 import type { CiProvider, FetchResult, Scope } from "./providers/types.js"
 import type { RunStatus } from "./status.js"
-import type { Job, Provider, Run } from "./types.js"
+import type { BuildkiteConfig, Job, Provider, Run } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Doubles. Everything the App reaches for is injected, so nothing here touches
@@ -101,6 +103,23 @@ function makeDashboard() {
     getCurrentWorkflows(): Run[] {
       return rendered.at(-1)?.runs ?? []
     },
+    destroy() {},
+    // No-op event registrations — App.initialize() wires all of these up via
+    // setupEventHandlers(), but nothing in these tests fires a dashboard event.
+    onRefresh() {},
+    onExit() {},
+    onOpenRun() {},
+    onOpenPR() {},
+    onDismissRun() {},
+    onDismissAllCompleted() {},
+    onResurrectRun() {},
+    onKillRun() {},
+    onDockerAction() {},
+    onPRMerge() {},
+    onPRCheckout() {},
+    onPRAction() {},
+    onRunRerun() {},
+    onRunLogs() {},
   }
 
   return { dashboard: dashboard as unknown as Dashboard, rendered, logs }
@@ -108,12 +127,19 @@ function makeDashboard() {
 
 interface AppInternals {
   repositories: string[]
+  providers: CiProvider[]
   oldestWorkflowTimestamp?: string
   watchedWorkflows: Set<string>
   completedWorkflows: Map<string, Run>
   performRefresh(isManual?: boolean): Promise<void>
   dismissRun(key: string): void
   dismissAllCompletedRuns(runs: Run[]): void
+  buildProviders(args: {
+    noGithub?: boolean
+    noBuildkite?: boolean
+    bkOrg?: string
+    pipelines?: string[]
+  }): CiProvider[]
 }
 
 function makeApp(providers: CiProvider[]) {
@@ -345,5 +371,133 @@ describe("resurrect", () => {
 
     expect(visibleKeys(rendered)).toContain(old.key)
     expect(internals.completedWorkflows.has(old.key)).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Provider assembly (Ruling 25 / Ruling 26 / Ruling 27). Built in
+// initialize(), never in the constructor, because config isn't loaded yet
+// there. The Buildkite provider is never constructed for real — a factory
+// seam captures the options it would have been built with.
+// ---------------------------------------------------------------------------
+
+describe("provider assembly", () => {
+  const originalToken = process.env.BUILDKITE_API_TOKEN
+
+  afterEach(() => {
+    if (originalToken === undefined) {
+      delete process.env.BUILDKITE_API_TOKEN
+    } else {
+      process.env.BUILDKITE_API_TOKEN = originalToken
+    }
+  })
+
+  function makeAssemblyApp(buildkiteConfig: BuildkiteConfig = {}) {
+    const { dashboard } = makeDashboard()
+    const captured: BuildkiteProviderOptions[] = []
+    const configManager = { buildkite: buildkiteConfig } as unknown as ConfigManager
+    const app = new App({
+      dashboard,
+      configManager,
+      buildkiteFactory: (options) => {
+        captured.push(options)
+        return { name: "buildkite" } as unknown as CiProvider
+      },
+    })
+    return { internals: app as unknown as AppInternals, captured }
+  }
+
+  test("both providers are built by default", () => {
+    const { internals, captured } = makeAssemblyApp()
+
+    const providers = internals.buildProviders({})
+
+    expect(providers.map((p) => p.name)).toEqual(["github", "buildkite"])
+    expect(captured).toHaveLength(1)
+  })
+
+  test("--no-buildkite omits the Buildkite provider", () => {
+    const { internals, captured } = makeAssemblyApp()
+
+    const providers = internals.buildProviders({ noBuildkite: true })
+
+    expect(providers.map((p) => p.name)).toEqual(["github"])
+    expect(captured).toHaveLength(0)
+  })
+
+  test("--no-github omits GitHubProvider from the CI list, but the provider is otherwise untouched", () => {
+    const { internals } = makeAssemblyApp()
+
+    const providers = internals.buildProviders({ noGithub: true })
+
+    expect(providers.map((p) => p.name)).toEqual(["buildkite"])
+  })
+
+  test("--bk-org overrides buildkite.org", () => {
+    const { internals, captured } = makeAssemblyApp({ org: "config-org" })
+
+    internals.buildProviders({ bkOrg: "flag-org" })
+
+    expect(captured[0].org).toBe("flag-org")
+  })
+
+  test("without --bk-org, buildkite.org from config is used", () => {
+    const { internals, captured } = makeAssemblyApp({ org: "config-org" })
+
+    internals.buildProviders({})
+
+    expect(captured[0].org).toBe("config-org")
+  })
+
+  test("--pipeline overrides buildkite.pipelines", () => {
+    const { internals, captured } = makeAssemblyApp({ pipelines: ["config-pipe"] })
+
+    internals.buildProviders({ pipelines: ["flag-pipe"] })
+
+    expect(captured[0].pipelines).toEqual(["flag-pipe"])
+  })
+
+  test("the env token beats the config token", () => {
+    process.env.BUILDKITE_API_TOKEN = "env-token"
+    const { internals, captured } = makeAssemblyApp({ token: "config-token" })
+
+    internals.buildProviders({})
+
+    expect(captured[0].token).toBe("env-token")
+  })
+
+  test("with no env token, the config token is used", () => {
+    delete process.env.BUILDKITE_API_TOKEN
+    const { internals, captured } = makeAssemblyApp({ token: "config-token" })
+
+    internals.buildProviders({})
+
+    expect(captured[0].token).toBe("config-token")
+  })
+})
+
+describe("initialize() and injected providers", () => {
+  test("providers injected through AppDependencies survive initialize() untouched", async () => {
+    const provider = new FakeProvider("acme-ci", [])
+    const { dashboard } = makeDashboard()
+    const configManager = new ConfigManager()
+    let buildkiteFactoryCalls = 0
+    const app = new App({
+      providers: [provider],
+      dashboard,
+      configManager,
+      buildkiteFactory: () => {
+        buildkiteFactoryCalls++
+        return { name: "buildkite" } as unknown as CiProvider
+      },
+    })
+
+    await app.initialize({ repositories: ["acme/widgets"] })
+    const internals = app as unknown as AppInternals
+
+    expect(internals.providers).toEqual([provider])
+    expect(buildkiteFactoryCalls).toBe(0)
+
+    app.stop()
   })
 })

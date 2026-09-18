@@ -175,3 +175,73 @@ describe("jobs with no steps", () => {
     expect(content).not.toContain("Press 'd' to dismiss")
   })
 })
+
+// The grid, whose boxes carry the empty-state instructions or the run cards —
+// whichever `layoutWorkflows` most recently built.
+const gridBoxes = (): Array<{ getContent(): string }> =>
+  (dashboard as unknown as { grid: Array<{ getContent(): string }> }).grid
+
+describe("empty-state diagnostics", () => {
+  // A Buildkite misconfiguration on a checkout with no GitHub Actions runs
+  // must not look like idle CI — the empty state has to say why each
+  // provider contributed nothing.
+  test("a diagnostic renders in the empty state when the grid has no cards", () => {
+    dashboard.updateWorkflows([], new Map(), undefined, undefined, [
+      {
+        provider: "buildkite",
+        level: "info",
+        message: "Buildkite: no token ($BUILDKITE_API_TOKEN or buildkite.token) — skipped",
+      },
+    ])
+
+    const content = gridBoxes()[0]?.getContent() ?? ""
+    expect(content).toContain(
+      "Buildkite: no token ($BUILDKITE_API_TOKEN or buildkite.token) — skipped",
+    )
+  })
+
+  test("error-level diagnostics are visually distinct from info-level ones", () => {
+    dashboard.updateWorkflows([], new Map(), undefined, undefined, [
+      { provider: "buildkite", level: "info", message: "an info diagnostic" },
+      { provider: "buildkite", level: "error", message: "a rejected-token diagnostic" },
+    ])
+
+    // blessed (tags: true) parses `{red-fg}`/`{white-fg}` into their SGR
+    // escape codes by the time getContent() returns them, so the tag
+    // survives only as that distinct color code around each message.
+    const content = gridBoxes()[0]?.getContent() ?? ""
+    const esc = String.fromCharCode(27)
+    const colorBefore = (message: string): string | undefined =>
+      content.slice(0, content.indexOf(message)).match(new RegExp(`${esc}\\[(\\d+)m$`))?.[1]
+
+    const infoColor = colorBefore("an info diagnostic")
+    const errorColor = colorBefore("a rejected-token diagnostic")
+    expect(infoColor).toBeDefined()
+    expect(errorColor).toBeDefined()
+    expect(errorColor).not.toBe(infoColor)
+    expect(errorColor).toBe("31") // red — matches the event log's error color
+  })
+
+  test("diagnostics disappear from the empty state once the grid is truly empty of them", () => {
+    dashboard.updateWorkflows([], new Map(), undefined, undefined, [])
+
+    const content = gridBoxes()[0]?.getContent() ?? ""
+    expect(content).not.toContain("diagnostic")
+  })
+
+  test("diagnostics are not shown once the grid has cards", () => {
+    const run = makeRun({ status: "running" })
+    dashboard.updateWorkflows([run], new Map(), undefined, undefined, [
+      { provider: "buildkite", level: "error", message: "should never render on a card" },
+    ])
+
+    const content = gridBoxes()
+      .map((box) => box.getContent())
+      .join("\n")
+    expect(content).not.toContain("should never render on a card")
+
+    // Leave the dashboard back in its empty, diagnostic-free starting state
+    // for any test that runs after this one in the shared instance.
+    dashboard.updateWorkflows([], new Map(), undefined, undefined, [])
+  })
+})
