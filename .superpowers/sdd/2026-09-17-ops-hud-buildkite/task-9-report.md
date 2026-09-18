@@ -189,3 +189,127 @@ confirmed absent from the working tree afterward, and `git status` showed no str
 
 One commit, staged as `git add -A`, with the brief's exact `feat!:` message plus the
 required `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>` trailer.
+
+---
+
+## Fix round 1 (Ruling 33): the lockfile was over-resolved
+
+**What actually happened, described plainly.** The original fix (`bun.lock` deleted then
+`bun install`) didn't just rewrite the `name` field — it fully re-resolved the dependency
+tree. Twelve packages moved to their newest in-range versions, including every runtime
+dependency: `commander` 14.0.1→14.0.3, `date-fns` 4.1.0→4.4.0, `execa` 9.6.0→9.6.1.
+`@biomejs/biome` moved 2.2.4→2.5.14 (a devDependency but the one that introduced the two
+spurious "info" notices reported earlier), plus `@types/bun`, `@types/node`, `typescript`,
+and transitives (`bun-types`, `undici-types`, `pretty-ms`, `yoctocolors`). My prior report's
+"a newer biome patch" undersold this: it was every dependency in the lockfile, hidden inside
+a breaking-change rename commit where nobody would think to review lockfile churn line by
+line. Restored per Ruling 33.
+
+**Fix applied, exactly per the ruling:**
+1. `git show 16b53ef:bun.lock > bun.lock` — restored the lockfile from the commit before the
+   rename (the last commit where the tree was in its tested state).
+2. Changed only the root workspace's `name` field, `"gh-hud"` → `"ops-hud"`. Nothing else in
+   the file was touched by hand.
+3. `rm -rf node_modules && bun install --frozen-lockfile` — succeeded without modifying
+   `bun.lock`, confirmed by `git diff 16b53ef -- bun.lock` below, and reinstalled
+   `node_modules` at the original resolved versions (`@biomejs/biome@2.2.4`,
+   `commander@14.0.1`, `date-fns@4.1.0`, `execa@9.6.0`, etc. — matching the versions this
+   branch was actually developed and tested against).
+
+**`git diff 16b53ef -- bun.lock`** (the only permitted change):
+```diff
+diff --git a/bun.lock b/bun.lock
+index f20a0f6..fde60eb 100644
+--- a/bun.lock
++++ b/bun.lock
+@@ -3,7 +3,7 @@
+   "configVersion": 0,
+   "workspaces": {
+     "": {
+-      "name": "gh-hud",
++      "name": "ops-hud",
+       "dependencies": {
+         "blessed": "^0.1.81",
+         "chalk": "^5.6.2",
+```
+Confirmed this is the entire diff — no other line changed.
+
+**Gates, re-run against the restored (original) versions:**
+
+`bun install --frozen-lockfile`:
+```
+bun install v1.3.11 (af24e281)
+
++ @biomejs/biome@2.2.4
++ @types/blessed@0.1.25
++ @types/bun@1.3.14
++ @types/node@24.5.2
++ typescript@5.9.2
++ blessed@0.1.81
++ chalk@5.6.2
++ commander@14.0.1
++ date-fns@4.1.0
++ execa@9.6.0
+
+35 packages installed [275.00ms]
+```
+Succeeded with `--frozen-lockfile`; `bun.lock` unmodified (see diff above) — all runtime
+deps back to their originally-tested versions.
+
+`bun run build`:
+```
+$ bun run tsc
+```
+No output, exit 0.
+
+`bun test`:
+```
+bun test v1.3.11 (af24e281)
+
+ 185 pass
+ 0 fail
+ 380 expect() calls
+Ran 185 tests across 10 files. [3.31s]
+```
+
+`bun biome check .`:
+```
+Checked 28 files in 42ms. No fixes applied.
+```
+Exit 0. **The two "info" notices from before (`$schema` version mismatch, `recommended`→
+`preset` deprecation) are gone** — confirming they were purely an artifact of the accidental
+biome 2.2.4→2.5.14 bump, not anything wrong with this branch's code or config. No real error
+was reported on biome 2.2.4, so no code fix was needed.
+
+ESC check:
+```
+bun test </dev/null >/tmp/opshud-t9b.txt 2>&1
+LC_ALL=C grep -c "$(printf '\033')" /tmp/opshud-t9b.txt
+```
+→ prints `0`.
+
+Symlink `--help` check (rebuilt `dist/` against the restored versions first):
+```
+$ ln -s <worktree>/dist/index.js /tmp/ops-hud
+$ node /tmp/ops-hud --help
+Usage: ops-hud [options] [command] [path]
+
+CI and ops dashboard for the terminal — GitHub Actions and Buildkite
+...
+  --bk-org <org>                Buildkite organization slug
+  --pipeline <slugs...>         Buildkite pipeline slugs to watch
+  --no-buildkite                Disable the Buildkite provider
+  --no-github                   Disable the GitHub provider
+...
+Commands:
+  watch [options] [path]        Watch CI runs
+```
+Usage line says `ops-hud`; all four flags present.
+
+`npm pack --dry-run`: same 59 files, `ops-hud-2.0.0.tgz`, 90.3 kB packed / 421.5 kB unpacked
+— identical contents to the previous report (expected: the built `dist/` output is unchanged
+code, only the dependency versions it was built against changed). No tarball written to
+disk; `git status --short` after the check showed only `bun.lock` as modified.
+
+**Commit:** `fix: keep the rename's lockfile to the name change only`, containing only the
+restored-and-renamed `bun.lock`, with the message and trailer specified in Ruling 33.
