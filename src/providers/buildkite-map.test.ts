@@ -49,6 +49,15 @@ describe("mapBuildkiteBuild", () => {
     expect(mapBuildkiteBuild(blockedBuild).status).toBe("blocked")
   })
 
+  // A build that is merely queued/passed/blocked is not "running-but-doomed" —
+  // isFailing must stay false unless the build's own state says `failing`.
+  test("does not flag a passed or blocked build as failing", () => {
+    expect(rawBuild.state).toBe("passed")
+    expect(mapBuildkiteBuild(rawBuild).isFailing).toBe(false)
+    expect(blockedBuild.state).toBe("blocked")
+    expect(mapBuildkiteBuild(blockedBuild).isFailing).toBe(false)
+  })
+
   test("embeds jobs into the run's own key space", () => {
     const run = mapBuildkiteBuild(rawBuild)
     const job = mapBuildkiteJob(rawBuild.jobs[0], run.key)
@@ -69,13 +78,31 @@ describe("mapBuildkiteBuild", () => {
     expect(blockedBuild.creator).toBeNull()
     expect(mapBuildkiteBuild(blockedBuild).actor).toBeUndefined()
   })
+
+  // Fix round 1, item 2: a pipeline whose remote is not GitHub (or otherwise
+  // fails to parse) must not fall back to `slug/slug` by accident — owner
+  // must be explicitly empty and name/fullName the slug.
+  test("falls back to an explicit repo when the pipeline's remote is not GitHub", () => {
+    const build = {
+      ...rawBuild,
+      pipeline: {
+        ...rawBuild.pipeline,
+        slug: "some-pipeline",
+        repository: "git@gitlab.com:acme/widgets.git",
+      },
+    }
+    const run = mapBuildkiteBuild(build)
+    expect(run.repo).toEqual({ owner: "", name: "some-pipeline", fullName: "some-pipeline" })
+    expect(run.key).toBe(`buildkite:some-pipeline:${run.id}`)
+  })
 })
 
 describe("mapBuildkiteJob", () => {
   test("keeps the command, since Buildkite jobs have no steps", () => {
     const job = mapBuildkiteJob(rawBuild.jobs[0], "buildkite:acme/widgets:x")
     expect(job.steps).toBeUndefined()
-    expect(typeof job.id).toBe("string")
+    expect(job.id).toBe(rawBuild.jobs[0].id)
+    expect(job.command).toBe(rawBuild.jobs[0].command)
   })
 
   // Ruling B: Job.key is now required, composed as `${runKey}:${id}` because
@@ -103,11 +130,37 @@ describe("mapBuildkiteJob", () => {
     expect(job.name).toBe("test + explode, build + push image")
   })
 
+  // Fix round 1, item 1: adjacent shortcodes at the start of the name count
+  // as a single token to strip.
+  test("strips a run of adjacent shortcodes as one token", () => {
+    const job = mapBuildkiteJob({ ...rawBuild.jobs[0], name: ":docker::k8s: deploy" }, "k")
+    expect(job.name).toBe("deploy")
+  })
+
+  // A shortcode in the middle of the name is stripped too, and the
+  // surrounding whitespace collapses to a single space.
+  test("strips a shortcode in the middle of a name", () => {
+    const job = mapBuildkiteJob({ ...rawBuild.jobs[0], name: "build :rocket: fast" }, "k")
+    expect(job.name).toBe("build fast")
+  })
+
   // A name that is *only* a shortcode would otherwise become an empty
   // string; fall back to the raw name instead.
   test("falls back to the raw name when stripping shortcodes leaves nothing", () => {
     const job = mapBuildkiteJob({ ...rawBuild.jobs[0], name: ":rocket:" }, "k")
     expect(job.name).toBe(":rocket:")
+  })
+
+  // Fix round 1, item 1 (the correctness bug): colon-namespaced job names and
+  // plain timestamps are common in CI and must survive completely unchanged
+  // — the old regex matched any colon-delimited segment, not just whole
+  // whitespace-delimited shortcode tokens.
+  test("leaves colon-namespaced and timestamp-like names untouched", () => {
+    expect(mapBuildkiteJob({ ...rawBuild.jobs[0], name: "12:30:45" }, "k").name).toBe("12:30:45")
+    expect(mapBuildkiteJob({ ...rawBuild.jobs[0], name: "deploy:prod:us-east" }, "k").name).toBe(
+      "deploy:prod:us-east",
+    )
+    expect(mapBuildkiteJob({ ...rawBuild.jobs[0], name: "a:b:c" }, "k").name).toBe("a:b:c")
   })
 
   // The blocked fixture's manual job has a `label` but no `name`, and

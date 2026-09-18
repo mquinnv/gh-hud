@@ -53,9 +53,12 @@ function firstLine(text: string): string {
 
 // Real Buildkite job names/labels are routinely emoji shortcodes meant to
 // render as an icon, e.g. `:gradle: test + explode, build + push image` or
-// `:pipeline: upload`. A terminal shows the literal `:gradle:` text instead,
-// which reads as noise on a narrow card, so strip it.
-const SHORTCODE = /:[a-z0-9_+-]+:/g
+// `:docker::k8s: deploy` (adjacent shortcodes count as one token). A terminal
+// shows the literal `:gradle:` text instead, which reads as noise on a
+// narrow card, so strip it — but only as a whole whitespace-delimited token,
+// never mid-word. Colon-namespaced names like `deploy:prod:us-east` or plain
+// timestamps like `12:30:45` are common in CI and must survive untouched.
+const SHORTCODE = /(?<=^|\s)(?::[a-z0-9_+-]+:)+(?=\s|$)/g
 
 function cleanJobName(raw: string): string {
   const stripped = raw.replace(SHORTCODE, "").replace(/\s+/g, " ").trim()
@@ -82,9 +85,21 @@ export function indexPipelinesByRepo(pipelines: BuildkitePipelinePayload[]): Map
   return index
 }
 
+function repoFromPipeline(pipeline: BuildkitePipelinePayload): Run["repo"] {
+  const githubRepo = parseGitHubRemote(pipeline.repository ?? "")
+  if (githubRepo) {
+    const [owner, name] = githubRepo.split("/")
+    return { owner, name, fullName: githubRepo }
+  }
+  // A non-GitHub remote (or one that fails to parse) has no owner to offer.
+  // Fall back to the pipeline slug explicitly, rather than splitting it and
+  // accidentally reusing it as both owner and name (`slug/slug`).
+  return { owner: "", name: pipeline.slug, fullName: pipeline.slug }
+}
+
 export function mapBuildkiteBuild(raw: BuildkiteBuildPayload): Run {
-  const fullName = parseGitHubRemote(raw.pipeline.repository ?? "") ?? raw.pipeline.slug
-  const [owner = "", name = fullName] = fullName.split("/")
+  const repo = repoFromPipeline(raw.pipeline)
+  const fullName = repo.fullName
   const message = raw.message ?? undefined
 
   return {
@@ -100,7 +115,7 @@ export function mapBuildkiteBuild(raw: BuildkiteBuildPayload): Run {
     status: fromBuildkite(raw.state),
     // Buildkite reports this directly; GitHub has to derive it from jobs.
     isFailing: raw.state === "failing",
-    repo: { owner, name, fullName },
+    repo,
     actor: raw.creator?.name ?? undefined,
     // Buildkite's `source` (webhook, schedule, api, ...) is the same concept
     // as GitHub's `event`, under a different name.
