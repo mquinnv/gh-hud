@@ -71,7 +71,6 @@ const DEFAULT_CONFIG: Config = {
   organizations: [], // Don't default to any orgs
   refreshInterval: 5000, // 5 seconds
   maxWorkflows: 20,
-  filterStatus: [], // Show all statuses by default
   showCompletedFor: 60, // minutes - show completed for longer
   buildkite: {},
 }
@@ -103,7 +102,9 @@ export class ConfigManager {
     for (const path of paths) {
       try {
         const content = await readFile(path, "utf-8")
-        const userConfig = JSON.parse(content)
+        // `filterStatus` was a 1.x key that no filter ever read. Old files
+        // that still carry it keep loading; the key is simply dropped.
+        const { filterStatus: _ignored, ...userConfig } = JSON.parse(content)
         this.config = { ...DEFAULT_CONFIG, ...userConfig }
         break
       } catch (_error) {
@@ -142,10 +143,6 @@ export class ConfigManager {
 
   get maxWorkflows(): number {
     return this.config.maxWorkflows || 20
-  }
-
-  get filterStatus(): string[] {
-    return this.config.filterStatus || []
   }
 
   get showCompletedFor(): number {

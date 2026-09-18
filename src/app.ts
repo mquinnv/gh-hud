@@ -12,7 +12,7 @@ import { GitHubProvider } from "./providers/github.js"
 import { applyIsFailing } from "./providers/github-map.js"
 import type { CiProvider, ProviderDiagnostic, Scope } from "./providers/types.js"
 import { rerunVerb, runNoun } from "./run-wording.js"
-import { isActive } from "./status.js"
+import { isActive, type RunStatus } from "./status.js"
 import type { DockerServiceStatus, Job, PullRequest, Run } from "./types.js"
 
 const execAsync = promisify(exec)
@@ -53,6 +53,10 @@ export class App {
   private isRefreshing = false
   private watchedWorkflows: Set<string> = new Set() // Run keys we've been watching
   private completedWorkflows: Map<string, Run> = new Map() // Keep finished runs until dismissed
+  // Blocked runs the user dismissed, with the status they had at the time.
+  // Hidden only while that status holds: once unblocked, canceled or
+  // anything else, the run comes back.
+  private dismissedBlocked: Map<string, RunStatus> = new Map()
   private showPRs = false
   private pullRequests: PullRequest[] = []
   private showDocker = false
@@ -225,7 +229,7 @@ export class App {
 
     // Handle dismissing finished runs
     this.dashboard.onDismissRun((run: Run) => {
-      this.dismissRun(run.key)
+      this.dismissRun(run.key, run.status)
     })
 
     // Handle dismissing all finished runs
@@ -563,11 +567,16 @@ export class App {
         this.oldestWorkflowTimestamp = oldestRun.createdAt
       }
 
+      // A dismissed blocked run whose status has moved on is no longer dismissed.
+      for (const run of allRuns) {
+        const dismissedAs = this.dismissedBlocked.get(run.key)
+        if (dismissedAs !== undefined && dismissedAs !== run.status) {
+          this.dismissedBlocked.delete(run.key)
+        }
+      }
+
       // Visible runs = active runs + finished ones pending confirmation, excluding dismissed
-      const visibleRuns = allRuns.filter((run) => {
-        if (isActive(run.status)) return true
-        return this.completedWorkflows.has(run.key)
-      })
+      const visibleRuns = allRuns.filter((run) => this.isVisible(run))
 
       // Fetch jobs for active runs, unless the provider already handed them over
       const jobPromises = visibleRuns
@@ -644,7 +653,20 @@ export class App {
     }
   }
 
-  private dismissRun(key: string): void {
+  /** Active and not a dismissed blocked run, or finished and still awaiting dismissal. */
+  private isVisible(run: Run): boolean {
+    if (this.dismissedBlocked.get(run.key) === run.status) return false
+    if (isActive(run.status)) return true
+    return this.completedWorkflows.has(run.key)
+  }
+
+  private dismissRun(key: string, status?: RunStatus): void {
+    if (status === "blocked") {
+      // Still in flight: keep watching it, just hide it while it stays blocked.
+      this.dismissedBlocked.set(key, status)
+      this.updateDisplayAfterDismiss()
+      return
+    }
     this.completedWorkflows.delete(key)
     this.watchedWorkflows.delete(key)
     // Update display immediately without API refresh
@@ -665,10 +687,7 @@ export class App {
     // Get the last known workflows from the dashboard and filter out dismissed ones
     // This avoids an expensive API call just to update the display
     const currentWorkflows = this.dashboard.getCurrentWorkflows()
-    const filteredWorkflows = currentWorkflows.filter((run) => {
-      if (isActive(run.status)) return true
-      return this.completedWorkflows.has(run.key)
-    })
+    const filteredWorkflows = currentWorkflows.filter((run) => this.isVisible(run))
 
     // Update dashboard with filtered workflows immediately
     this.dashboard.updateWorkflows(

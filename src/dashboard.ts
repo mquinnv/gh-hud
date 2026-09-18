@@ -26,6 +26,15 @@ function escTruncated(text: string, max: number): string {
   return esc(cut)
 }
 
+/**
+ * Finished runs can be dismissed, and so can blocked ones: a pipeline that
+ * blocks on a manual gate every run would otherwise pile up cards forever.
+ * A dismissed blocked run comes back as soon as its status changes.
+ */
+function isDismissable(run: Run): boolean {
+  return isTerminal(run.status) || run.status === "blocked"
+}
+
 /** The visible width of tagged content with no escaped braces in it. */
 function visibleLength(tagged: string): number {
   return tagged.replace(/\{\/?[\w\-,;!#]*\}/g, "").length
@@ -214,7 +223,7 @@ export class Dashboard {
       // Handle lowercase d manually as additional backup
       if (key.name === "d" && !key.shift && !key.ctrl && !key.meta) {
         const workflow = this.workflows[this.selectedIndex]
-        if (workflow && isTerminal(workflow.status)) {
+        if (workflow && isDismissable(workflow)) {
           this.screen.emit("dismiss-workflow", workflow)
         }
       }
@@ -525,7 +534,7 @@ export class Dashboard {
       } else if (this.selectionMode === "workflows") {
         // Keep existing workflow dismiss functionality
         const workflow = this.workflows[this.selectedIndex]
-        if (workflow && isTerminal(workflow.status)) {
+        if (workflow && isDismissable(workflow)) {
           this.screen.emit("dismiss-workflow", workflow)
         }
       }
@@ -604,7 +613,7 @@ export class Dashboard {
     // Dismiss completed workflow
     this.screen.key(["d"], () => {
       const workflow = this.workflows[this.selectedIndex]
-      if (workflow && isTerminal(workflow.status)) {
+      if (workflow && isDismissable(workflow)) {
         this.screen.emit("dismiss-workflow", workflow)
       }
     })
@@ -1073,7 +1082,7 @@ export class Dashboard {
 
 {bold}Actions:{/bold}
   r       - Force refresh
-  d       - Dismiss completed run
+  d       - Dismiss finished run (blocked: until it changes)
   D       - Dismiss ALL completed runs
   k       - Kill/cancel running run
   j       - Expand/collapse job steps (completed jobs are collapsed by default)
@@ -2193,6 +2202,9 @@ Press '?', '/', or 'Esc' to close...`,
 
         if (isActive(workflow.status)) {
           shortcuts.push("k: cancel")
+          // A pipeline that blocks on a manual gate every run would otherwise
+          // pile up cards nobody can clear.
+          if (workflow.status === "blocked") shortcuts.push("d: dismiss")
         } else {
           shortcuts.push(`r: ${rerunVerb(workflow)}`, "d: dismiss")
         }

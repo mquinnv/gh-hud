@@ -47,6 +47,17 @@ describe("CLI flags", () => {
     expect(options.bkOrg).toBe("acme")
   })
 
+  // Ruling 39: the flag advertised GitHub status names and no filter ever read it.
+  test("-s/--status is no longer accepted", () => {
+    for (const flag of ["--status", "-s"]) {
+      const command = addWatchOptions(new Command())
+        .exitOverride()
+        .configureOutput({ writeErr: () => {}, writeOut: () => {} })
+        .action(() => {})
+      expect(() => command.parse([flag, "queued"], { from: "user" })).toThrow(/unknown option/)
+    }
+  })
+
   test("--pipeline collects one or more slugs", () => {
     const options = parseOptions(["--pipeline", "web", "api"])
     expect(options.pipeline).toEqual(["web", "api"])

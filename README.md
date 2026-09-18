@@ -229,14 +229,20 @@ Create a `.ops-hud.json` file in your home directory or project root (see
   ],
   "refreshInterval": 5000,
   "maxWorkflows": 20,
-  "filterStatus": ["in_progress", "queued"],
   "showCompletedFor": 5,
   "buildkite": {
     "org": "my-buildkite-org",
-    "pipelines": ["my-pipeline"]
+    "pipelines": []
   }
 }
 ```
+
+`buildkite.pipelines` is left empty on purpose: an empty list means "derive
+the pipelines from the repositories in scope". A non-empty list *replaces*
+that derivation everywhere, so a copied example slug would be watched instead
+of your real pipelines (and 404). Only fill it in with slugs you actually
+want. Older config files that still contain `filterStatus` keep loading; that
+key was never used and is now ignored.
 
 ### Configuration Options
 
@@ -246,7 +252,6 @@ Create a `.ops-hud.json` file in your home directory or project root (see
 | `organizations` | string[] | [] | Organizations to monitor |
 | `refreshInterval` | number | 5000 | Refresh interval in milliseconds |
 | `maxWorkflows` | number | 20 | Maximum number of runs to display |
-| `filterStatus` | string[] | ["in_progress", "queued"] | Filter runs by status |
 | `showCompletedFor` | number | 5 | Minutes to show completed runs |
 | `buildkite.token` | string | — | Buildkite API token; `$BUILDKITE_API_TOKEN` takes precedence |
 | `buildkite.org` | string | auto-detected | Buildkite organization slug |
@@ -260,7 +265,6 @@ Create a `.ops-hud.json` file in your home directory or project root (see
 | `-c, --config <path>` | Path to configuration file |
 | `-o, --org <organizations...>` | Organizations to monitor |
 | `-i, --interval <seconds>` | Refresh interval in seconds (default: 5) |
-| `-s, --status <statuses...>` | Filter by status (queued, in_progress, completed) |
 | `-p, --show-prs` | Show open pull requests in header |
 | `-d, --show-docker` | Show Docker Compose service status in header |
 | `--bk-org <org>` | Buildkite organization slug |
@@ -284,7 +288,7 @@ Create a `.ops-hud.json` file in your home directory or project root (see
 ### Run Management
 | Key | Action |
 |-----|--------|
-| `d` | Dismiss completed run |
+| `d` | Dismiss a finished run, or hide a blocked one until its status changes |
 | `D` | Dismiss ALL completed runs |
 | `k` | Kill/cancel running run |
 | `U` | Resurrect older run (undo dismiss) |
@@ -404,7 +408,6 @@ ops-hud/
 
 - Reduce the number of monitored repositories
 - Increase the refresh interval
-- Use `filterStatus` to only show active workflows
 
 ## Upgrading from gh-hud
 

@@ -356,6 +356,16 @@ describe("provider-accurate wording", () => {
     expect(shortcuts.some((s) => s.includes("rerun"))).toBe(false)
   })
 
+  test("a blocked run offers dismissal", () => {
+    const shortcuts = shortcutsFor(makeRun({ provider: "buildkite", status: "blocked" }))
+    expect(shortcuts).toContain("d: dismiss")
+  })
+
+  test("a running run still does not offer dismissal", () => {
+    const shortcuts = shortcutsFor(makeRun({ provider: "buildkite", status: "running" }))
+    expect(shortcuts).not.toContain("d: dismiss")
+  })
+
   test("a finished GitHub run offers 'rerun'", () => {
     const run = makeRun({ provider: "github", status: "passed" })
     const shortcuts = shortcutsFor(run)

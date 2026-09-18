@@ -148,3 +148,17 @@ describe("config home directory", () => {
     expect(manager.maxWorkflows).toBe(13)
   })
 })
+
+describe("retired config keys", () => {
+  test("an old config with filterStatus still loads, and the key is ignored", async () => {
+    const base = await mkdtemp(join(tmpdir(), "ops-hud-"))
+    await writeFile(
+      join(base, ".ops-hud.json"),
+      JSON.stringify({ maxWorkflows: 4, filterStatus: ["in_progress", "queued"] }),
+    )
+    const manager = new ConfigManager()
+    await manager.loadConfig(undefined, base, await freshHome())
+    expect(manager.maxWorkflows).toBe(4)
+    expect("filterStatus" in manager.getConfig()).toBe(false)
+  })
+})

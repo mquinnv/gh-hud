@@ -13,7 +13,6 @@ export interface WatchOptions {
   config?: string
   org?: string[]
   interval: string
-  status?: string[]
   showPrs?: boolean
   showDocker?: boolean
   bkOrg?: string
@@ -95,7 +94,6 @@ export function addWatchOptions(command: Command): Command {
     .option("-c, --config <path>", "Path to configuration file")
     .option("-o, --org <organizations...>", "Organizations to monitor")
     .option("-i, --interval <seconds>", "Refresh interval in seconds", "5")
-    .option("-s, --status <statuses...>", "Filter by status (queued, in_progress, completed)")
     .option("-p, --show-prs", "Show open pull requests in header")
     .option("-d, --show-docker", "Show Docker Compose service status in header")
     .option("--bk-org <org>", "Buildkite organization slug")

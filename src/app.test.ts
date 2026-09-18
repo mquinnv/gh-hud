@@ -153,7 +153,7 @@ interface AppInternals {
   watchedWorkflows: Set<string>
   completedWorkflows: Map<string, Run>
   performRefresh(isManual?: boolean): Promise<void>
-  dismissRun(key: string): void
+  dismissRun(key: string, status?: RunStatus): void
   dismissAllCompletedRuns(runs: Run[]): void
   setupEventHandlers(): void
   buildProviders(args: {
@@ -272,6 +272,43 @@ describe("dismissal", () => {
     expect(internals.completedWorkflows.has(running.key)).toBe(false)
     expect(internals.watchedWorkflows.has(running.key)).toBe(false)
     expect(visibleKeys(rendered)).toEqual([])
+  })
+
+  // Ruling 40: a pipeline that blocks on a manual gate every run must not pile
+  // up cards nobody can clear.
+  test("dismissing a blocked run hides it while it stays blocked", async () => {
+    const blocked = makeRun({ provider: "buildkite", status: "blocked" })
+    const provider = new FakeProvider("buildkite", [blocked])
+    const { internals, rendered } = makeApp([provider])
+
+    await internals.performRefresh()
+    expect(visibleKeys(rendered)).toEqual([blocked.key])
+
+    internals.dismissRun(blocked.key, "blocked")
+    expect(visibleKeys(rendered)).toEqual([])
+
+    await internals.performRefresh()
+    expect(visibleKeys(rendered)).toEqual([])
+  })
+
+  test("a dismissed blocked run comes back once its status changes", async () => {
+    const blocked = makeRun({ provider: "buildkite", status: "blocked" })
+    const provider = new FakeProvider("buildkite", [blocked])
+    const { internals, rendered } = makeApp([provider])
+
+    await internals.performRefresh()
+    internals.dismissRun(blocked.key, "blocked")
+    await internals.performRefresh()
+    expect(visibleKeys(rendered)).toEqual([])
+
+    provider.setRuns([{ ...blocked, status: "running" }])
+    await internals.performRefresh()
+    expect(visibleKeys(rendered)).toEqual([blocked.key])
+
+    // ...and blocking again does not re-hide it: the dismissal was spent.
+    provider.setRuns([blocked])
+    await internals.performRefresh()
+    expect(visibleKeys(rendered)).toEqual([blocked.key])
   })
 
   test("dismiss-all clears every finished run and leaves the in-flight one", async () => {

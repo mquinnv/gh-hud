@@ -81,7 +81,6 @@ export interface Config {
   organizations?: string[]
   refreshInterval?: number
   maxWorkflows?: number
-  filterStatus?: string[]
   showCompletedFor?: number // minutes to show completed workflows
   buildkite?: BuildkiteConfig
 }
