@@ -8,6 +8,29 @@ import { rerunVerb, runNoun } from "./run-wording.js"
 import { isActive, isTerminal, statusColor, statusIcon } from "./status.js"
 import type { DockerServiceStatus, Job, PullRequest, Run } from "./types.js"
 
+/**
+ * Makes API- or user-sourced text safe to interpolate into tagged blessed
+ * content. blessed parses `{word}` as a tag, so a Buildkite command such as
+ * `echo ${BUILDKITE_COMMIT}` would lose its variable name and a stray `{/}`
+ * would reset colours. Always escape the raw text after any truncation, so a
+ * cut can never land inside an `{open}`/`{close}` sequence.
+ */
+function esc(text: string | undefined | null): string {
+  return text ? blessed.escape(text) : ""
+}
+
+/** Truncates raw text to `max` visible characters with an ellipsis, then escapes it. */
+function escTruncated(text: string, max: number): string {
+  if (max <= 0) return ""
+  const cut = text.length > max ? `${text.slice(0, Math.max(0, max - 1))}…` : text
+  return esc(cut)
+}
+
+/** The visible width of tagged content with no escaped braces in it. */
+function visibleLength(tagged: string): number {
+  return tagged.replace(/\{\/?[\w\-,;!#]*\}/g, "").length
+}
+
 export class Dashboard {
   private screen: blessed.Widgets.Screen
   private grid: blessed.Widgets.BoxElement[] = []
@@ -1170,9 +1193,9 @@ Press '?', '/', or 'Esc' to close...`,
       height: 10,
       content: `{center}{bold}{red-fg}Cancel ${titleNoun}?{/red-fg}{/bold}{/center}
 
-{center}${projectName}{/center}
-{center}${run.pipeline || titleNoun} ${noun} #${run.number}{/center}
-{center}Branch: ${run.branch}{/center}
+{center}${esc(projectName)}{/center}
+{center}${esc(run.pipeline) || titleNoun} ${noun} #${run.number}{/center}
+{center}Branch: ${esc(run.branch)}{/center}
 
 {center}{bold}Press 'y' to confirm, 'n' or ESC to cancel{/bold}{/center}`,
       tags: true,
@@ -1545,7 +1568,7 @@ Press '?', '/', or 'Esc' to close...`,
             ? `\n\n${this.diagnostics
                 .map((d) => {
                   const color = d.level === "error" ? "red-fg" : "white-fg"
-                  return `{center}{${color}}${d.message}{/${color}}{/center}`
+                  return `{center}{${color}}${esc(d.message)}{/${color}}{/center}`
                 })
                 .join("\n")}`
             : ""
@@ -1766,32 +1789,33 @@ Press '?', '/', or 'Esc' to close...`,
       const repoLine = ` ${projectName} \ue725 ${branchName}`
       const runLine = ` ${run.pipeline || "CI"} Run #${run.number}`
 
-      // Pad to actual card width minus border (2 chars) and some margin
+      // Pad to actual card width minus border (2 chars) and some margin.
+      // Padded as raw text, then escaped, so the padding counts what shows.
       const padWidth = Math.max(30, this.currentBoxWidth - 4)
-      lines.push(`{inverse}${repoLine.padEnd(padWidth)}{/inverse}`)
-      lines.push(`{inverse}${runLine.padEnd(padWidth)}{/inverse}`)
+      lines.push(`{inverse}${esc(repoLine.padEnd(padWidth))}{/inverse}`)
+      lines.push(`{inverse}${esc(runLine.padEnd(padWidth))}{/inverse}`)
     } else {
       const branchName = run.branch
-      lines.push(` {bold}${projectName} \ue725 ${branchName}{/bold}`)
-      lines.push(` ${run.pipeline || "CI"} Run #{yellow-fg}${run.number}{/yellow-fg}`)
+      lines.push(` {bold}${esc(projectName)} \ue725 ${esc(branchName)}{/bold}`)
+      lines.push(` ${esc(run.pipeline) || "CI"} Run #{yellow-fg}${run.number}{/yellow-fg}`)
     }
     lines.push("")
 
     // What the run is actually building: the commit title, then who and which commit.
     if (run.title) {
-      lines.push(` ${run.title}`)
+      lines.push(` ${esc(run.title)}`)
     }
     if (run.event) {
-      const by = run.actor ? ` {#888888-fg}by ${run.actor}{/#888888-fg}` : ""
-      lines.push(` Triggered by: {magenta-fg}${run.event}{/magenta-fg}${by}`)
+      const by = run.actor ? ` {#888888-fg}by ${esc(run.actor)}{/#888888-fg}` : ""
+      lines.push(` Triggered by: {magenta-fg}${esc(run.event)}{/magenta-fg}${by}`)
     } else if (run.actor) {
-      lines.push(` Triggered by: {magenta-fg}${run.actor}{/magenta-fg}`)
+      lines.push(` Triggered by: {magenta-fg}${esc(run.actor)}{/magenta-fg}`)
     }
     if (run.sha) {
       lines.push(` Commit: {#888888-fg}${run.sha.substring(0, 7)}{/#888888-fg}`)
     }
     // Show repository owner in smaller text if needed
-    lines.push(` Repo: {#888888-fg}${run.repo.fullName}{/#888888-fg}`)
+    lines.push(` Repo: {#888888-fg}${esc(run.repo.fullName)}{/#888888-fg}`)
     lines.push("")
 
     // Status with more detail
@@ -1835,9 +1859,9 @@ Press '?', '/', or 'Esc' to close...`,
       jobs.forEach((job) => {
         const jobIcon = statusIcon(job.status)
         const jobColor = statusColor(job.status)
-        const agentInfo = job.agent ? ` [${job.agent}]` : ""
+        const agentInfo = job.agent ? ` [${esc(job.agent)}]` : ""
         lines.push(
-          ` {${jobColor}-fg}${jobIcon} ${job.name}{/${jobColor}-fg}{white-fg}${agentInfo}{/white-fg}`,
+          ` {${jobColor}-fg}${jobIcon} ${esc(job.name)}{/${jobColor}-fg}{white-fg}${agentInfo}{/white-fg}`,
         )
 
         let hasSubSteps = false
@@ -1864,12 +1888,12 @@ Press '?', '/', or 'Esc' to close...`,
                     : 0
 
                   lines.push(
-                    `   {bold}{yellow-fg}▶ ${stepNumber} ${step.name} (${stepDuration}s){/yellow-fg}{/bold}`,
+                    `   {bold}{yellow-fg}▶ ${stepNumber} ${esc(step.name)} (${stepDuration}s){/yellow-fg}{/bold}`,
                   )
                 } else {
                   // Upcoming steps (queued, or paused for a human)
                   const stepIcon = step.status === "blocked" ? "⏳" : "○"
-                  lines.push(`   {white-fg}${stepIcon} ${stepNumber} ${step.name}{/white-fg}`)
+                  lines.push(`   {white-fg}${stepIcon} ${stepNumber} ${esc(step.name)}{/white-fg}`)
                 }
               }
             }
@@ -1887,7 +1911,7 @@ Press '?', '/', or 'Esc' to close...`,
                 )
                 if (failedStep) {
                   hasSubSteps = true
-                  lines.push(`   {red-fg}✗ Failed at: ${failedStep.name}{/red-fg}`)
+                  lines.push(`   {red-fg}✗ Failed at: ${esc(failedStep.name)}{/red-fg}`)
                 }
               }
               // Passed jobs: no sub-steps, the job line itself shows the tick
@@ -1909,7 +1933,7 @@ Press '?', '/', or 'Esc' to close...`,
                 }
 
                 lines.push(
-                  `   {${stepColor}-fg}${stepIcon}{/${stepColor}-fg} {#888888-fg}${stepNumber}{/#888888-fg} ${step.name}{#888888-fg}${duration}{/#888888-fg}`,
+                  `   {${stepColor}-fg}${stepIcon}{/${stepColor}-fg} {#888888-fg}${stepNumber}{/#888888-fg} ${esc(step.name)}{#888888-fg}${duration}{/#888888-fg}`,
                 )
               })
             }
@@ -1921,7 +1945,7 @@ Press '?', '/', or 'Esc' to close...`,
             lines.push(`   {#888888-fg}Queued - ${job.steps.length} steps pending{/#888888-fg}`)
             job.steps.forEach((step, index) => {
               const stepNumber = `${index + 1}/${job.steps?.length}`
-              lines.push(`   {#888888-fg}○ ${stepNumber} ${step.name}{/#888888-fg}`)
+              lines.push(`   {#888888-fg}○ ${stepNumber} ${esc(step.name)}{/#888888-fg}`)
             })
           }
         }
@@ -1931,7 +1955,9 @@ Press '?', '/', or 'Esc' to close...`,
           lines.push(`   {cyan-fg}waiting for unblock{/cyan-fg}`)
         } else if (job.command) {
           hasSubSteps = true
-          lines.push(`   {#888888-fg}${job.command}{/#888888-fg}`)
+          // Multi-line commands (a `command: |` block) show their first line.
+          const firstLine = job.command.split(/\r?\n/, 1)[0]
+          lines.push(`   {#888888-fg}${esc(firstLine)}{/#888888-fg}`)
         } else if (showAllSteps && job.status === "queued") {
           hasSubSteps = true
           lines.push(`   {#888888-fg}Waiting to start...{/#888888-fg}`)
@@ -1960,18 +1986,23 @@ Press '?', '/', or 'Esc' to close...`,
    * replaced wholesale on every `updateWorkflows` call, so this clears itself
    * the moment a refresh no longer reports the error — nothing lingers.
    */
-  private errorDiagnosticsSegment(): string {
+  private errorDiagnosticsSegment(available: number): string {
     const errors = this.diagnostics.filter((d) => d.level === "error")
     if (errors.length === 0) return ""
 
-    const maxLen = 60
     const extra = errors.length - 1
     const suffix = extra > 0 ? ` (+${extra} more)` : ""
-    const budget = Math.max(10, maxLen - suffix.length - "⚠ ".length)
-    const message = errors[0].message
-    const truncated = message.length > budget ? `${message.slice(0, budget - 1)}…` : message
-
-    return ` | {red-fg}⚠ ${truncated}${suffix}{/red-fg}`
+    const prefix = " | ⚠ "
+    // The message gets whatever the counts left over, capped at 60 so one
+    // long error never dominates a wide terminal.
+    const budget = Math.min(60, available - prefix.length - suffix.length)
+    // Fewer than this many characters of a message is noise, not information.
+    const MIN_MESSAGE = 12
+    if (budget >= MIN_MESSAGE) {
+      return ` | {red-fg}⚠ ${escTruncated(errors[0].message, budget)}${suffix}{/red-fg}`
+    }
+    const bare = ` | ⚠ ${errors.length} error${errors.length === 1 ? "" : "s"}`
+    return bare.length <= available ? ` | {red-fg}${bare.slice(3)}{/red-fg}` : ""
   }
 
   private updateStatusBar(): void {
@@ -1991,18 +2022,30 @@ Press '?', '/', or 'Esc' to close...`,
     // Use last refresh time if available
     const updateTime = this.lastRefreshTime || new Date()
 
-    // Line 1: Status counts and refresh indicator
-    let line1 = `${refreshIndicator}Last Update: ${updateTime.toLocaleTimeString()} | `
-    line1 += `{yellow-fg}●{/} Running: ${runningCount} | `
-    line1 += `{#888888-fg}○{/} Queued: ${queuedCount}`
-    if (blockedCount > 0) {
-      line1 += ` | {cyan-fg}⏸{/} Blocked: ${blockedCount}`
+    // Line 1: Status counts and refresh indicator. It must never wrap: a
+    // wrapped line pushes the shortcut line out of the 4-row box (a tmux
+    // split is the usual culprit). The box's border takes two columns.
+    const width = Math.max(0, (this.screen.width as number) - 2)
+    const counts = (verbose: boolean): string => {
+      let text = `{yellow-fg}●{/} ${verbose ? "Running: " : ""}${runningCount} | `
+      text += `{#888888-fg}○{/} ${verbose ? "Queued: " : ""}${queuedCount}`
+      if (blockedCount > 0) {
+        text += ` | {cyan-fg}⏸{/} ${verbose ? "Blocked: " : ""}${blockedCount}`
+      }
+      if (completedCount > 0) {
+        text += ` | {green-fg}✓{/} ${verbose ? "Done: " : ""}${completedCount}`
+      }
+      return `${text} | ${verbose ? "Total: " : "Σ "}${this.workflows.length}`
     }
-    if (completedCount > 0) {
-      line1 += ` | {green-fg}✓{/} Done: ${completedCount}`
-    }
-    line1 += ` | Total: ${this.workflows.length}`
-    line1 += this.errorDiagnosticsSegment()
+    // Most to least verbose; the first that fits wins, and any error segment
+    // gets whatever width is left after it.
+    const candidates = [
+      `${refreshIndicator}Last Update: ${updateTime.toLocaleTimeString()} | ${counts(true)}`,
+      `${refreshIndicator}${counts(true)}`,
+      `${refreshIndicator}${counts(false)}`,
+    ]
+    let line1 = candidates.find((c) => visibleLength(c) <= width) ?? candidates[2]
+    line1 += this.errorDiagnosticsSegment(width - visibleLength(line1))
 
     // Line 2: Context-aware keyboard shortcuts
     const shortcuts = this.getContextualShortcuts()

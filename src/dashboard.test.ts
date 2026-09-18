@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { PassThrough } from "node:stream"
+import blessed from "blessed"
 import { mkdtempSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
@@ -19,6 +20,9 @@ const { Dashboard } = await import("./dashboard.js")
 // matters for `prepublishOnly`, which runs `bun test` during npm release).
 const output = new PassThrough()
 output.resume() // drain so blessed's writes never back up
+// A PassThrough has no `columns`, and blessed then assumes a 1-column
+// terminal. Give it a realistic width; width-specific tests set their own.
+;(output as unknown as { columns: number }).columns = 160
 const dashboard = new Dashboard({ input: new PassThrough(), output })
 
 afterAll(() => {
@@ -359,5 +363,139 @@ describe("provider-accurate wording", () => {
 
     // Leave the shared dashboard back in its empty starting state.
     dashboard.updateWorkflows([], new Map(), undefined, undefined, [])
+  })
+})
+
+// Ruling 38: blessed parses `{word}` as a tag. Anything that came from an API
+// or a user must reach the screen literally.
+const ESC = String.fromCharCode(27)
+/** What the terminal would actually show for tagged content: tags applied, colours dropped. */
+const rendered = (tagged: string): string =>
+  blessed.parseTags(tagged).replace(new RegExp(`${ESC}\\[[\\d;]*m`, "g"), "")
+
+describe("escaping API-sourced text", () => {
+  // blessed 0.1.81 leaves a brace pair whose word is not a style literal, so
+  // `${BUILDKITE_COMMIT}` alone survived even unescaped; a variable that
+  // happens to be named like a style (`${red}`, `${bold}`) was swallowed.
+  test("a command's shell variables render literally, even one named like a style", () => {
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal shell variable is the point
+    const command = "echo ${BUILDKITE_COMMIT} ${red}${bold}"
+    const job = makeJob({ status: "running", command })
+    expect(rendered(card(makeRun(), [job]))).toContain(command)
+  })
+
+  test("a multi-line command shows its first line only", () => {
+    const job = makeJob({ status: "running", command: "make build\nmake test" })
+    const shown = rendered(card(makeRun(), [job]))
+    expect(shown).toContain("make build")
+    expect(shown).not.toContain("make test")
+  })
+
+  test("braces in a job name, title, pipeline, branch and actor survive", () => {
+    const run = makeRun({
+      title: "feat: {bold} markup",
+      pipeline: "deploy {blue-fg}",
+      branch: "fix/{underline}",
+      actor: "{red}bot",
+    })
+    const job = makeJob({ name: "test {/} unit", status: "running" })
+    const shown = rendered(card(run, [job]))
+    for (const text of [
+      "feat: {bold} markup",
+      "deploy {blue-fg}",
+      "fix/{underline}",
+      "{red}bot",
+      "test {/} unit",
+    ]) {
+      expect(shown).toContain(text)
+    }
+    const selected = rendered(card(run, [job], true))
+    expect(selected).toContain("fix/{underline}")
+    expect(selected).toContain("deploy {blue-fg}")
+  })
+
+  test("a diagnostic containing {/} does not reset the status-bar colour", () => {
+    const run = makeRun({ status: "running" })
+    dashboard.updateWorkflows([run], new Map(), undefined, undefined, [
+      { provider: "buildkite", level: "error", message: "Unexpected token {/} in JSON" },
+    ])
+
+    const content = statusBarContent()
+    expect(content).toContain("Unexpected token {/} in JSON")
+    // Still red after the braces: nothing reset the colour mid-message.
+    const afterBraces = content.slice(content.indexOf("{/}") + 3, content.indexOf(" in JSON"))
+    expect(afterBraces).not.toContain(`${ESC}[`)
+    const beforeMessage = content.slice(0, content.indexOf("Unexpected token"))
+    expect(beforeMessage).toContain(`${ESC}[31m`)
+
+    dashboard.updateWorkflows([], new Map(), undefined, undefined, [])
+  })
+
+  test("a diagnostic with braces renders literally in the empty state", () => {
+    dashboard.updateWorkflows([], new Map(), undefined, undefined, [
+      { provider: "buildkite", level: "error", message: "Unexpected token {/} at {bold}" },
+    ])
+
+    const content = gridBoxes()[0]?.getContent() ?? ""
+    expect(content).toContain("Unexpected token {/} at {bold}")
+
+    dashboard.updateWorkflows([], new Map(), undefined, undefined, [])
+  })
+})
+
+// Deferred item 10: in a tmux split, a wrapped status line pushes the
+// shortcut line out of the 4-row box.
+describe("status-bar width", () => {
+  const program = (dashboard as unknown as { screen: { program: { cols: number } } }).screen.program
+
+  /** Line 1 as the terminal shows it: tags parsed, colours and centering dropped. */
+  const line1 = (): string =>
+    rendered(statusBarContent().split("\n")[0]).replace(/\{\/?center\}/g, "")
+
+  function withWidth(cols: number, fn: () => void): void {
+    const original = program.cols
+    program.cols = cols
+    try {
+      fn()
+    } finally {
+      program.cols = original
+      dashboard.updateWorkflows([], new Map(), undefined, undefined, [])
+    }
+  }
+
+  const longError = {
+    provider: "buildkite",
+    level: "error" as const,
+    message:
+      "Buildkite: HTTP 500 from /organizations/acme/pipelines/site-content-usm/builds?per_page=20",
+  }
+
+  test("at 80 columns line 1 fits, with the error truncated to what is left", () => {
+    withWidth(80, () => {
+      const runs = [
+        makeRun({ status: "running" }),
+        makeRun({ id: "2", key: "k2", status: "blocked" }),
+      ]
+      dashboard.updateWorkflows(runs, new Map(), undefined, undefined, [longError])
+
+      const line = line1()
+      expect(line.length).toBeLessThanOrEqual(78)
+      expect(line).toContain("⚠")
+    })
+  })
+
+  test("at 50 columns line 1 still fits, and the error collapses to a count", () => {
+    withWidth(50, () => {
+      const runs = [
+        makeRun({ status: "running" }),
+        makeRun({ id: "2", key: "k2", status: "blocked" }),
+      ]
+      dashboard.updateWorkflows(runs, new Map(), undefined, undefined, [longError, longError])
+
+      const line = line1()
+      expect(line.length).toBeLessThanOrEqual(48)
+      expect(line).toContain("⚠ 2 errors")
+      expect(line).not.toContain("HTTP 500")
+    })
   })
 })
