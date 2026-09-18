@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { App } from "./app.js"
 import { ConfigManager } from "./config.js"
 import type { Dashboard } from "./dashboard.js"
-import type { BuildkiteProviderOptions } from "./providers/buildkite.js"
+import { BuildkiteProvider, type BuildkiteProviderOptions } from "./providers/buildkite.js"
 import type { GitHubProvider } from "./providers/github.js"
 import type { CiProvider, FetchResult, Scope } from "./providers/types.js"
 import type { RunStatus } from "./status.js"
@@ -169,6 +169,21 @@ function makeApp(providers: CiProvider[]) {
   return { app, internals, rendered, logs, handlers }
 }
 
+/** A raw Buildkite build payload, for tests that drive the real provider. */
+function bkBuild(state: string, jobs: Array<Record<string, unknown>>, id = "b1") {
+  return {
+    id,
+    number: 1,
+    state,
+    commit: "deadbeef",
+    branch: "main",
+    web_url: "https://buildkite.com/acme/widgets/builds/1",
+    created_at: "2026-09-17T10:00:00Z",
+    pipeline: { slug: "widgets", name: "widgets", repository: "git@github.com:acme/widgets.git" },
+    jobs,
+  }
+}
+
 const visibleKeys = (rendered: Array<{ runs: Run[] }>): string[] =>
   (rendered.at(-1)?.runs ?? []).map((run) => run.key)
 
@@ -282,6 +297,52 @@ describe("isFailing", () => {
     await internals.performRefresh()
 
     expect(rendered.at(-1)?.runs[0].isFailing).toBe(false)
+  })
+
+  // Ruling 34: Buildkite's own `failing` state is authoritative. A skipped
+  // (broken) job must not make a healthy running build look doomed.
+  test("a running Buildkite build with a broken job is not flagged, and the job is skipped", async () => {
+    const provider = new BuildkiteProvider({
+      token: "t",
+      org: "acme",
+      pipelines: ["widgets"],
+      fetch: async () =>
+        new Response(
+          JSON.stringify([
+            bkBuild("running", [
+              { id: "a", type: "script", name: "build", state: "passed" },
+              { id: "b", type: "script", name: "deploy", state: "broken" },
+            ]),
+          ]),
+        ),
+    })
+    const { internals, rendered } = makeApp([provider])
+
+    await internals.performRefresh()
+
+    const run = rendered.at(-1)?.runs[0]
+    expect(run?.isFailing).toBe(false)
+    const jobs = rendered.at(-1)?.jobs.get(run?.key ?? "") ?? []
+    expect(jobs.find((j) => j.id === "b")?.status).toBe("skipped")
+  })
+
+  test("a failing Buildkite build keeps isFailing through performRefresh", async () => {
+    const provider = new BuildkiteProvider({
+      token: "t",
+      org: "acme",
+      pipelines: ["widgets"],
+      fetch: async () =>
+        new Response(
+          JSON.stringify([
+            bkBuild("failing", [{ id: "a", type: "script", name: "build", state: "passed" }]),
+          ]),
+        ),
+    })
+    const { internals, rendered } = makeApp([provider])
+
+    await internals.performRefresh()
+
+    expect(rendered.at(-1)?.runs[0].isFailing).toBe(true)
   })
 
   test("a finished run is never flagged — its status already carries the verdict", async () => {

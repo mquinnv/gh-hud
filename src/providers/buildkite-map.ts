@@ -1,5 +1,5 @@
 import { parseGitHubRemote } from "../config.js"
-import { fromBuildkite } from "../status.js"
+import { fromBuildkite, fromBuildkiteJob } from "../status.js"
 import type { Job, Run } from "../types.js"
 
 // Shapes of the `GET /v2/organizations/{org}/builds` and
@@ -27,6 +27,8 @@ export interface BuildkiteJobPayload {
   /** Where to `GET` this job's log text. Absent on jobs that never ran. */
   log_url?: string
   agent?: { name?: string | null } | null
+  /** True when the step allowed this failure (`soft_fail`). */
+  soft_failed?: boolean | null
   started_at?: string | null
   finished_at?: string | null
 }
@@ -132,6 +134,14 @@ export function mapBuildkiteBuild(raw: BuildkiteBuildPayload): Run {
 
 const JOB_TYPES = new Set(["script", "manual", "trigger", "waiter"])
 
+/**
+ * A waiter (`wait` step) has no name and no meaning on a card — it is
+ * pipeline plumbing, not work — so it never reaches the jobs list.
+ */
+export function isDisplayableJob(raw: BuildkiteJobPayload): boolean {
+  return raw.type !== "waiter"
+}
+
 export function mapBuildkiteJob(raw: BuildkiteJobPayload, runKey: string): Job {
   const type = raw.type && JOB_TYPES.has(raw.type) ? (raw.type as Job["type"]) : undefined
   const rawName = raw.name ?? raw.label ?? raw.command ?? "(unnamed)"
@@ -142,7 +152,7 @@ export function mapBuildkiteJob(raw: BuildkiteJobPayload, runKey: string): Job {
     runKey,
     // Buildkite jobs are frequently named only by an emoji label.
     name: cleanJobName(rawName),
-    status: fromBuildkite(raw.state),
+    status: fromBuildkiteJob(raw.state, raw.soft_failed === true),
     startedAt: raw.started_at ?? undefined,
     finishedAt: raw.finished_at ?? undefined,
     agent: raw.agent?.name ?? undefined,

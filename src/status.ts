@@ -97,6 +97,54 @@ export function fromBuildkite(state: string): RunStatus {
   }
 }
 
+/**
+ * Buildkite *job* states are a different set from build states, so they get
+ * their own table. The difference that matters: a `broken` job never ran (an
+ * `if:` evaluated false, or a branch filter didn't match) — that is a skip, not
+ * a failure, and must not paint the card red or flag the build as failing.
+ * A soft-failed job failed in a way the pipeline explicitly tolerates, so it is
+ * shown as skipped rather than failed for the same reason.
+ */
+export function fromBuildkiteJob(state: string, softFailed = false): RunStatus {
+  switch (state) {
+    case "pending":
+    case "waiting":
+    case "scheduled":
+    case "limiting":
+    case "limited":
+    case "reserved":
+    case "assigned":
+    case "accepted":
+    case "platform_limiting":
+      return "queued"
+    case "running":
+      return "running"
+    case "blocked":
+      return "blocked"
+    case "passed":
+    // A manual gate that someone cleared: the step did its job.
+    case "unblocked":
+      return "passed"
+    case "failed":
+      return softFailed ? "skipped" : "failed"
+    case "canceling":
+    case "canceled":
+      return "canceled"
+    case "timing_out":
+    case "timed_out":
+    case "expired":
+      return "timed_out"
+    case "skipped":
+    case "broken":
+    case "waiting_failed":
+    case "blocked_failed":
+    case "unblocked_failed":
+      return "skipped"
+    default:
+      return "running"
+  }
+}
+
 export function statusIcon(status: RunStatus, isFailing = false): string {
   if (status === "running") return isFailing ? "◉" : "●"
   switch (status) {

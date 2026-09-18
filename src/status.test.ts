@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import {
   fromBuildkite,
+  fromBuildkiteJob,
   fromGitHub,
   isActive,
   isTerminal,
+  type RunStatus,
   statusColor,
   statusIcon,
 } from "./status.js"
@@ -109,5 +111,52 @@ describe("icons and colors", () => {
       expect(statusIcon(s).length).toBeGreaterThan(0)
       expect(statusColor(s).length).toBeGreaterThan(0)
     }
+  })
+})
+
+// Ruling 34: job states are their own set. A `broken` job never ran (an `if:`
+// was false or a branch filter didn't match) and must not render as a failure.
+describe("fromBuildkiteJob", () => {
+  const table: Array<[string, RunStatus]> = [
+    ["pending", "queued"],
+    ["waiting", "queued"],
+    ["scheduled", "queued"],
+    ["limiting", "queued"],
+    ["limited", "queued"],
+    ["reserved", "queued"],
+    ["assigned", "queued"],
+    ["accepted", "queued"],
+    ["platform_limiting", "queued"],
+    ["running", "running"],
+    ["blocked", "blocked"],
+    ["passed", "passed"],
+    ["unblocked", "passed"],
+    ["failed", "failed"],
+    ["canceling", "canceled"],
+    ["canceled", "canceled"],
+    ["timing_out", "timed_out"],
+    ["timed_out", "timed_out"],
+    ["expired", "timed_out"],
+    ["skipped", "skipped"],
+    ["broken", "skipped"],
+    ["waiting_failed", "skipped"],
+    ["blocked_failed", "skipped"],
+    ["unblocked_failed", "skipped"],
+    ["something_new", "running"],
+  ]
+
+  for (const [state, expected] of table) {
+    test(`${state} -> ${expected}`, () => {
+      expect(fromBuildkiteJob(state)).toBe(expected)
+    })
+  }
+
+  test("a soft-failed job is skipped, not failed", () => {
+    expect(fromBuildkiteJob("failed", true)).toBe("skipped")
+  })
+
+  test("a failed job without the soft-fail flag is failed", () => {
+    expect(fromBuildkiteJob("failed", false)).toBe("failed")
+    expect(fromBuildkiteJob("failed")).toBe("failed")
   })
 })

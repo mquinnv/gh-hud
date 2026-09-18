@@ -1,10 +1,11 @@
-import { fromBuildkite } from "../status.js"
+import { fromBuildkiteJob } from "../status.js"
 import type { Job, Run } from "../types.js"
 import {
   type BuildkiteBuildPayload,
   type BuildkiteJobPayload,
   type BuildkitePipelinePayload,
   indexPipelinesByRepo,
+  isDisplayableJob,
   mapBuildkiteBuild,
   mapBuildkiteJob,
 } from "./buildkite-map.js"
@@ -89,7 +90,7 @@ class HttpError extends Error {
 function pickLogJob(jobs: BuildkiteJobPayload[]): BuildkiteJobPayload | undefined {
   const failed = jobs.find((job) => {
     if (!job.log_url) return false
-    const status = fromBuildkite(job.state)
+    const status = fromBuildkiteJob(job.state, job.soft_failed === true)
     return status === "failed" || status === "timed_out"
   })
   if (failed) return failed
@@ -205,7 +206,9 @@ export class BuildkiteProvider implements CiProvider {
     for (const raw of builds) {
       try {
         const run = mapBuildkiteBuild(raw)
-        const runJobs = raw.jobs.map((job) => mapBuildkiteJob(job, run.key))
+        const runJobs = raw.jobs
+          .filter(isDisplayableJob)
+          .map((job) => mapBuildkiteJob(job, run.key))
         runs.push(run)
         jobs.set(run.key, runJobs)
       } catch (error) {

@@ -585,8 +585,14 @@ export class App {
         this.jobs.set(key, jobs)
       })
 
-      // A run that is still going but already has a failed job is doomed; say so.
-      const workflows = visibleRuns.map((run) => applyIsFailing(run, this.jobs.get(run.key) ?? []))
+      // A GitHub run that is still going but already has a failed job is
+      // doomed; say so. Buildkite reports this itself (the build's `failing`
+      // state, which the mapper already turned into isFailing) and that is
+      // authoritative: deriving it from jobs would flag skipped or
+      // soft-failed jobs as failures.
+      const workflows = visibleRuns.map((run) =>
+        run.provider === "github" ? applyIsFailing(run, this.jobs.get(run.key) ?? []) : run,
+      )
 
       // Update dashboard - only pass PRs/Docker data when those features are enabled
       this.dashboard.updateWorkflows(

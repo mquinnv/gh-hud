@@ -812,3 +812,31 @@ describe("BuildkiteProvider.logs", () => {
     expect(requestedLogUrl).toBe("https://api.buildkite.com/v2/log/build")
   })
 })
+
+describe("BuildkiteProvider job list (Ruling 34)", () => {
+  test("waiter jobs are dropped from the jobs map; broken and soft-failed jobs are skipped", async () => {
+    const provider = new BuildkiteProvider({
+      token: "good",
+      org: "acme",
+      fetch: async () =>
+        jsonResponse([
+          buildPayload("b1", 1, {
+            state: "running",
+            jobs: [
+              { id: "build", type: "script", name: "build", state: "passed" },
+              { id: "wait", type: "waiter", state: "passed" },
+              { id: "deploy", type: "script", name: "deploy", state: "broken" },
+              { id: "lint", type: "script", name: "lint", state: "failed", soft_failed: true },
+            ],
+          }),
+        ]),
+    })
+
+    const result = await provider.fetchRuns(emptyScope)
+    const jobs = result.jobs?.get(result.runs[0].key) ?? []
+
+    expect(jobs.map((j) => j.id)).toEqual(["build", "deploy", "lint"])
+    expect(jobs.find((j) => j.id === "deploy")?.status).toBe("skipped")
+    expect(jobs.find((j) => j.id === "lint")?.status).toBe("skipped")
+  })
+})
