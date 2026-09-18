@@ -5,7 +5,7 @@ import { homedir } from "os"
 import { join, resolve } from "path"
 import type { Dashboard } from "./dashboard.js"
 import type { GitHubProvider } from "./providers/github.js"
-import type { Config, Repository } from "./types.js"
+import type { BuildkiteConfig, Config, Repository } from "./types.js"
 
 // Extract "owner/repo" from a GitHub remote URL, or null if it isn't one.
 // Handles https://github.com/owner/repo(.git) and git@github.com:owner/repo(.git).
@@ -65,6 +65,7 @@ const DEFAULT_CONFIG: Config = {
   maxWorkflows: 20,
   filterStatus: [], // Show all statuses by default
   showCompletedFor: 60, // minutes - show completed for longer
+  buildkite: {},
 }
 
 export class ConfigManager {
@@ -128,6 +129,10 @@ export class ConfigManager {
 
   get showCompletedFor(): number {
     return this.config.showCompletedFor || 5
+  }
+
+  get buildkite(): BuildkiteConfig {
+    return this.config.buildkite ?? {}
   }
 
   // Build final list of repositories from config and orgs

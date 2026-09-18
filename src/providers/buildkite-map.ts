@@ -24,6 +24,8 @@ export interface BuildkiteJobPayload {
   state: string
   command?: string | null
   web_url?: string
+  /** Where to `GET` this job's log text. Absent on jobs that never ran. */
+  log_url?: string
   agent?: { name?: string | null } | null
   started_at?: string | null
   finished_at?: string | null
