@@ -1,8 +1,44 @@
+import type { Duplex } from "node:stream"
 import blessed from "blessed"
 import * as fs from "fs"
 import * as os from "os"
 import * as path from "path"
-import type { DockerServiceStatus, PullRequest, WorkflowJob, WorkflowRun } from "./types.js"
+import type { ProviderDiagnostic } from "./providers/types.js"
+import { rerunVerb, runNoun } from "./run-wording.js"
+import { isActive, isTerminal, statusColor, statusIcon } from "./status.js"
+import type { DockerServiceStatus, Job, PullRequest, Run } from "./types.js"
+
+/**
+ * Makes API- or user-sourced text safe to interpolate into tagged blessed
+ * content. blessed parses `{word}` as a tag, so a Buildkite command such as
+ * `echo ${BUILDKITE_COMMIT}` would lose its variable name and a stray `{/}`
+ * would reset colours. Always escape the raw text after any truncation, so a
+ * cut can never land inside an `{open}`/`{close}` sequence.
+ */
+function esc(text: string | undefined | null): string {
+  return text ? blessed.escape(text) : ""
+}
+
+/** Truncates raw text to `max` visible characters with an ellipsis, then escapes it. */
+function escTruncated(text: string, max: number): string {
+  if (max <= 0) return ""
+  const cut = text.length > max ? `${text.slice(0, Math.max(0, max - 1))}…` : text
+  return esc(cut)
+}
+
+/**
+ * Finished runs can be dismissed, and so can blocked ones: a pipeline that
+ * blocks on a manual gate every run would otherwise pile up cards forever.
+ * A dismissed blocked run comes back as soon as its status changes.
+ */
+function isDismissable(run: Run): boolean {
+  return isTerminal(run.status) || run.status === "blocked"
+}
+
+/** The visible width of tagged content with no escaped braces in it. */
+function visibleLength(tagged: string): number {
+  return tagged.replace(/\{\/?[\w\-,;!#]*\}/g, "").length
+}
 
 export class Dashboard {
   private screen: blessed.Widgets.Screen
@@ -23,10 +59,10 @@ export class Dashboard {
     isProject?: boolean // True if this represents the project name, not individual service
   }> = []
   private selectionMode: "workflows" | "prs" | "docker" = "workflows" // Track which area is selected
-  private workflows: WorkflowRun[] = []
+  private workflows: Run[] = []
   private pullRequests: PullRequest[] = []
   private dockerServices: DockerServiceStatus[] = []
-  private jobsCache = new Map<string, WorkflowJob[]>() // Cache for job data
+  private jobsCache = new Map<string, Job[]>() // Cache for job data, keyed by Run.key
   private modalOpen = false
   private currentBoxWidth = 80
   private cols = 1 // Number of columns in the grid
@@ -56,11 +92,15 @@ export class Dashboard {
   private lastRefreshTime?: Date // Track when data was actually refreshed
   private lastStatusLine1 = "" // Cache last status line to avoid re-rendering
   private lastStatusLine2 = "" // Cache last status line to avoid re-rendering
-  private expandedJobs: Set<string> = new Set() // Track which job IDs are expanded (default is collapsed)
+  private expandedJobs: Set<string> = new Set() // Expanded jobs, by Job.key (collapsed is the default)
   private zoomedMode = false // Track if a workflow is zoomed to full screen
   private zoomedWorkflowIndex = 0 // Track which workflow is zoomed
+  // Provider diagnostics from the most recent refresh — shown in the
+  // empty-state panel (a Buildkite failure must not look like idle CI) and
+  // never shown once the grid has cards.
+  private diagnostics: ProviderDiagnostic[] = []
 
-  constructor() {
+  constructor(streams?: { input: Duplex; output: Duplex }) {
     // Load saved preferences
     this.loadPreferences()
 
@@ -70,14 +110,17 @@ export class Dashboard {
 
     this.screen = blessed.screen({
       smartCSR: true,
-      title: "GitHub Workflow Monitor",
+      title: "Ops HUD",
       fullUnicode: true,
       warnings: false,
       keys: true,
       vi: false,
       mouse: true, // Enable mouse support for scrolling
-      input: process.stdin,
-      output: process.stdout,
+      // Production never passes `streams`, so this is process.stdin/stdout as
+      // before. Tests pass a throwaway PassThrough pair so blessed never
+      // touches the real terminal (never switches to the alternate screen).
+      input: streams?.input ?? process.stdin,
+      output: streams?.output ?? process.stdout,
       terminal: "xterm-color", // Force xterm-color to avoid Setulc
       forceUnicode: true,
       fastCSR: true, // Use fast CSR to reduce flickering
@@ -170,7 +213,7 @@ export class Dashboard {
 
       // Manual key handling for uppercase D as fallback
       if (key.name === "d" && key.shift && !key.ctrl && !key.meta) {
-        const completedWorkflows = this.workflows.filter((w) => w.status === "completed")
+        const completedWorkflows = this.workflows.filter((w) => isTerminal(w.status))
         if (completedWorkflows.length > 0) {
           this.screen.emit("dismiss-all-completed", completedWorkflows)
         }
@@ -180,7 +223,7 @@ export class Dashboard {
       // Handle lowercase d manually as additional backup
       if (key.name === "d" && !key.shift && !key.ctrl && !key.meta) {
         const workflow = this.workflows[this.selectedIndex]
-        if (workflow && workflow.status === "completed") {
+        if (workflow && isDismissable(workflow)) {
           this.screen.emit("dismiss-workflow", workflow)
         }
       }
@@ -491,7 +534,7 @@ export class Dashboard {
       } else if (this.selectionMode === "workflows") {
         // Keep existing workflow dismiss functionality
         const workflow = this.workflows[this.selectedIndex]
-        if (workflow && workflow.status === "completed") {
+        if (workflow && isDismissable(workflow)) {
           this.screen.emit("dismiss-workflow", workflow)
         }
       }
@@ -558,7 +601,7 @@ export class Dashboard {
         }
       } else if (this.selectionMode === "workflows") {
         const workflow = this.workflows[this.selectedIndex]
-        if (workflow && workflow.status === "completed") {
+        if (workflow && isTerminal(workflow.status)) {
           this.screen.emit("workflow-rerun", workflow)
         }
       } else {
@@ -570,7 +613,7 @@ export class Dashboard {
     // Dismiss completed workflow
     this.screen.key(["d"], () => {
       const workflow = this.workflows[this.selectedIndex]
-      if (workflow && workflow.status === "completed") {
+      if (workflow && isDismissable(workflow)) {
         this.screen.emit("dismiss-workflow", workflow)
       }
     })
@@ -578,14 +621,14 @@ export class Dashboard {
     // Kill/cancel running workflow
     this.screen.key(["k"], () => {
       const workflow = this.workflows[this.selectedIndex]
-      if (workflow && (workflow.status === "in_progress" || workflow.status === "queued")) {
+      if (workflow && isActive(workflow.status)) {
         this.showKillConfirmation(workflow)
       }
     })
 
     // Dismiss ALL completed workflows - comprehensive key handling
     const dismissAllHandler = () => {
-      const completedWorkflows = this.workflows.filter((w) => w.status === "completed")
+      const completedWorkflows = this.workflows.filter((w) => isTerminal(w.status))
       if (completedWorkflows.length > 0) {
         this.screen.emit("dismiss-all-completed", completedWorkflows)
       }
@@ -916,16 +959,16 @@ export class Dashboard {
     }
   }
 
-  private getBorderColor(workflow: WorkflowRun, isSelected: boolean): string {
+  private getBorderColor(run: Run, isSelected: boolean): string {
     if (isSelected) return "cyan" // Selected always gets cyan border
 
-    if (workflow.status === "completed") {
-      switch (workflow.conclusion) {
-        case "success":
+    if (isTerminal(run.status)) {
+      switch (run.status) {
+        case "passed":
           return "green"
-        case "failure":
-          return "red"
-        case "cancelled":
+        case "failed":
+        case "timed_out":
+        case "canceled":
           return "red"
         case "skipped":
           return "#888888"
@@ -934,7 +977,7 @@ export class Dashboard {
       }
     }
 
-    return "#f0f0f0" // Default border for active workflows
+    return "#f0f0f0" // Default border for active runs
   }
 
   private lastSelectedIndex = -1
@@ -980,7 +1023,7 @@ export class Dashboard {
         // Update old box content to remove selected header styling
         const oldWorkflow = this.workflows[this.lastSelectedIndex]
         if (oldWorkflow) {
-          const jobs = this.jobsCache.get(`${oldWorkflow.id}`) || []
+          const jobs = this.jobsCache.get(oldWorkflow.key) || []
           const oldContent = this.formatWorkflowContent(oldWorkflow, jobs, false)
           oldBox.setContent(oldContent)
         }
@@ -996,7 +1039,7 @@ export class Dashboard {
         // Update new box content to show selected header styling
         const newWorkflow = this.workflows[this.selectedIndex]
         if (newWorkflow) {
-          const jobs = this.jobsCache.get(`${newWorkflow.id}`) || []
+          const jobs = this.jobsCache.get(newWorkflow.key) || []
           const newContent = this.formatWorkflowContent(newWorkflow, jobs, true)
           newBox.setContent(newContent)
         }
@@ -1026,7 +1069,7 @@ export class Dashboard {
       width: "50%",
       height: "50%",
       content: `
-{center}{bold}GitHub Workflow Monitor - Help{/bold}{/center}
+{center}{bold}Ops HUD - Help{/bold}{/center}
 
 {bold}Navigation:{/bold}
   Tab        - Switch between PRs and workflows
@@ -1039,11 +1082,11 @@ export class Dashboard {
 
 {bold}Actions:{/bold}
   r       - Force refresh
-  d       - Dismiss completed workflow
-  D       - Dismiss ALL completed workflows
-  k       - Kill/cancel running workflow
+  d       - Dismiss finished run (blocked: until it changes)
+  D       - Dismiss ALL completed runs
+  k       - Kill/cancel running run
   j       - Expand/collapse job steps (completed jobs are collapsed by default)
-  U       - Resurrect older workflow (undo dismiss)
+  U       - Resurrect older run (undo dismiss)
   ?       - Show this help
   q/Ctrl+C - Quit
 
@@ -1141,13 +1184,15 @@ Press '?', '/', or 'Esc' to close...`,
     }
   }
 
-  private showKillConfirmation(workflow: WorkflowRun): void {
+  private showKillConfirmation(run: Run): void {
     // Create confirmation dialog
     if (this.confirmBox) {
       this.confirmBox.destroy()
     }
 
-    const projectName = `${workflow.repository.owner}/${workflow.repository.name}`
+    const projectName = run.repo.fullName
+    const noun = runNoun(run)
+    const titleNoun = noun.replace(/\b\w/g, (c) => c.toUpperCase())
 
     this.confirmBox = blessed.box({
       parent: this.screen,
@@ -1155,11 +1200,11 @@ Press '?', '/', or 'Esc' to close...`,
       left: "center",
       width: 60,
       height: 10,
-      content: `{center}{bold}{red-fg}Cancel Workflow?{/red-fg}{/bold}{/center}
+      content: `{center}{bold}{red-fg}Cancel ${titleNoun}?{/red-fg}{/bold}{/center}
 
-{center}${projectName}{/center}
-{center}${workflow.workflowName || "Workflow"} Run #${workflow.runNumber}{/center}
-{center}Branch: ${workflow.headBranch}{/center}
+{center}${esc(projectName)}{/center}
+{center}${esc(run.pipeline) || titleNoun} ${noun} #${run.number}{/center}
+{center}Branch: ${esc(run.branch)}{/center}
 
 {center}{bold}Press 'y' to confirm, 'n' or ESC to cancel{/bold}{/center}`,
       tags: true,
@@ -1186,7 +1231,7 @@ Press '?', '/', or 'Esc' to close...`,
       if (key && (key.name === "y" || key.name === "Y")) {
         // User confirmed
         this.hideKillConfirmation()
-        this.screen.emit("kill-workflow", workflow)
+        this.screen.emit("kill-workflow", run)
       } else if (key && (key.name === "n" || key.name === "N" || key.name === "escape")) {
         // User cancelled
         this.hideKillConfirmation()
@@ -1277,7 +1322,7 @@ Press '?', '/', or 'Esc' to close...`,
   private showInitialState(): void {
     // Just show the status bar with loading message - no intrusive dialog
     this.statusBox.setContent("{center}Loading workflows... Press 'q' to quit{/center}")
-    this.log("GitHub HUD started", "info")
+    this.log("Ops HUD started", "info")
 
     // Log any pending preference messages
     if (this.pendingPrefsLog.length > 0) {
@@ -1302,10 +1347,11 @@ Press '?', '/', or 'Esc' to close...`,
   }
 
   updateWorkflows(
-    workflows: WorkflowRun[],
-    jobs: Map<string, WorkflowJob[]>,
+    workflows: Run[],
+    jobs: Map<string, Job[]>,
     pullRequests?: PullRequest[],
     dockerServices?: DockerServiceStatus[],
+    diagnostics?: ProviderDiagnostic[],
   ): void {
     // Don't update the display if a modal dialog is open
     if (this.modalOpen) {
@@ -1314,6 +1360,7 @@ Press '?', '/', or 'Esc' to close...`,
       this.pullRequests = pullRequests || []
       this.dockerServices = dockerServices || []
       this.jobsCache = jobs // Update the cache
+      this.diagnostics = diagnostics ?? []
       return
     }
 
@@ -1331,6 +1378,7 @@ Press '?', '/', or 'Esc' to close...`,
       this.showPRs = pullRequests !== undefined
       this.showDocker = dockerServices !== undefined
       this.jobsCache = jobs // Update the cache
+      this.diagnostics = diagnostics ?? []
 
       // Update debug info - now logged at trace level
       this.updateDebugInfo({
@@ -1369,8 +1417,15 @@ Press '?', '/', or 'Esc' to close...`,
         this.dockerHeaderBox = undefined
       }
 
-      // Only recreate layout if the number of workflows changed or grid doesn't exist
-      if (workflows.length !== previousWorkflowCount || this.grid.length === 0) {
+      // Only recreate layout if the number of workflows changed or grid doesn't exist.
+      // An empty grid is always rebuilt: diagnostics can change every refresh
+      // (e.g. a Buildkite token starts failing) while the workflow count stays
+      // at zero, and the empty-state panel must reflect the latest ones.
+      if (
+        workflows.length !== previousWorkflowCount ||
+        this.grid.length === 0 ||
+        workflows.length === 0
+      ) {
         this.layoutWorkflows()
       }
 
@@ -1388,7 +1443,7 @@ Press '?', '/', or 'Esc' to close...`,
     }
   }
 
-  getCurrentWorkflows(): WorkflowRun[] {
+  getCurrentWorkflows(): Run[] {
     return this.workflows
   }
 
@@ -1513,7 +1568,20 @@ Press '?', '/', or 'Esc' to close...`,
       const topOffset = prHeaderHeight + dockerHeaderHeight // Offset for PR and Docker headers
 
       if (count === 0) {
-        // Show empty state
+        // Show empty state, plus why each provider contributed nothing — a
+        // Buildkite misconfiguration on a checkout with no GitHub Actions
+        // runs must not look like idle CI. Error diagnostics render in red,
+        // matching the event log's convention, so a rejected token is loud.
+        const diagnosticsBlock =
+          this.diagnostics.length > 0
+            ? `\n\n${this.diagnostics
+                .map((d) => {
+                  const color = d.level === "error" ? "red-fg" : "white-fg"
+                  return `{center}{${color}}${esc(d.message)}{/${color}}{/center}`
+                })
+                .join("\n")}`
+            : ""
+
         const emptyBox = blessed.box({
           parent: this.screen,
           top: topOffset,
@@ -1526,7 +1594,7 @@ Press '?', '/', or 'Esc' to close...`,
 {center}Press 'r' to refresh or 'q' to quit{/center}
 
 {center}Completed workflows will be shown until dismissed{/center}
-{center}To see activity, trigger a workflow in your repositories{/center}`,
+{center}To see activity, trigger a workflow in your repositories{/center}${diagnosticsBlock}`,
           tags: true,
           border: {
             type: "line",
@@ -1662,7 +1730,7 @@ Press '?', '/', or 'Esc' to close...`,
     }
   }
 
-  private renderWorkflows(workflows: WorkflowRun[], jobs: Map<string, WorkflowJob[]>): void {
+  private renderWorkflows(workflows: Run[], jobs: Map<string, Job[]>): void {
     // Handle zoom mode - only render the zoomed workflow
     if (this.zoomedMode) {
       const workflow = workflows[this.zoomedWorkflowIndex]
@@ -1670,7 +1738,7 @@ Press '?', '/', or 'Esc' to close...`,
         const box = this.grid[0]
         const content = this.formatWorkflowContent(
           workflow,
-          jobs.get(`${workflow.id}`) || [],
+          jobs.get(workflow.key) || [],
           true, // Always mark as selected in zoom mode
         )
 
@@ -1692,11 +1760,7 @@ Press '?', '/', or 'Esc' to close...`,
 
       const box = this.grid[index]
       const isSelected = index === this.selectedIndex
-      const content = this.formatWorkflowContent(
-        workflow,
-        jobs.get(`${workflow.id}`) || [],
-        isSelected,
-      )
+      const content = this.formatWorkflowContent(workflow, jobs.get(workflow.key) || [], isSelected)
 
       // Only update if content actually changed
       const currentContent = box.getContent()
@@ -1711,14 +1775,10 @@ Press '?', '/', or 'Esc' to close...`,
     this.scheduleRender()
   }
 
-  private formatWorkflowContent(
-    workflow: WorkflowRun,
-    jobs: WorkflowJob[],
-    isSelected: boolean = false,
-  ): string {
+  private formatWorkflowContent(run: Run, jobs: Job[], isSelected: boolean = false): string {
     const lines: string[] = []
 
-    // Determine if we should show all steps based on number of workflows or zoom mode
+    // Determine if we should show all steps based on number of runs or zoom mode
     const showAllSteps = this.workflows.length <= 2 || this.zoomedMode
 
     // Map of known repo to working directory names (same as PRs)
@@ -1729,68 +1789,71 @@ Press '?', '/', or 'Esc' to close...`,
     }
 
     // Get working directory name
-    const fullRepoName = `${workflow.repository.owner}/${workflow.repository.name}`
-    const projectName = repoToWorkingDir[fullRepoName] || workflow.repository.name
+    const projectName = repoToWorkingDir[run.repo.fullName] || run.repo.name
 
-    // Header with project name (working dir) and actual branch the workflow is running on
+    // Header with project name (working dir) and actual branch the run is on
     if (isSelected) {
       // Create full-width inverted header block
-      const branchName = workflow.headBranch
+      const branchName = run.branch
       const repoLine = ` ${projectName} \ue725 ${branchName}`
-      const runLine = ` ${workflow.workflowName || "CI"} Run #${workflow.runNumber}`
+      const runLine = ` ${run.pipeline || "CI"} Run #${run.number}`
 
-      // Pad to actual card width minus border (2 chars) and some margin
+      // Pad to actual card width minus border (2 chars) and some margin.
+      // Padded as raw text, then escaped, so the padding counts what shows.
       const padWidth = Math.max(30, this.currentBoxWidth - 4)
-      lines.push(`{inverse}${repoLine.padEnd(padWidth)}{/inverse}`)
-      lines.push(`{inverse}${runLine.padEnd(padWidth)}{/inverse}`)
+      lines.push(`{inverse}${esc(repoLine.padEnd(padWidth))}{/inverse}`)
+      lines.push(`{inverse}${esc(runLine.padEnd(padWidth))}{/inverse}`)
     } else {
-      const branchName = workflow.headBranch
-      lines.push(` {bold}${projectName} \ue725 ${branchName}{/bold}`)
-      lines.push(
-        ` ${workflow.workflowName || "CI"} Run #{yellow-fg}${workflow.runNumber}{/yellow-fg}`,
-      )
+      const branchName = run.branch
+      lines.push(` {bold}${esc(projectName)} \ue725 ${esc(branchName)}{/bold}`)
+      lines.push(` ${esc(run.pipeline) || "CI"} Run #{yellow-fg}${run.number}{/yellow-fg}`)
     }
     lines.push("")
 
-    // Event and commit info (removed duplicate branch line)
-    lines.push(` Triggered by: {magenta-fg}${workflow.event}{/magenta-fg}`)
-    if (workflow.headSha) {
-      lines.push(` Commit: {#888888-fg}${workflow.headSha.substring(0, 7)}{/#888888-fg}`)
+    // What the run is actually building: the commit title, then who and which commit.
+    if (run.title) {
+      lines.push(` ${esc(run.title)}`)
+    }
+    if (run.event) {
+      const by = run.actor ? ` {#888888-fg}by ${esc(run.actor)}{/#888888-fg}` : ""
+      lines.push(` Triggered by: {magenta-fg}${esc(run.event)}{/magenta-fg}${by}`)
+    } else if (run.actor) {
+      lines.push(` Triggered by: {magenta-fg}${esc(run.actor)}{/magenta-fg}`)
+    }
+    if (run.sha) {
+      lines.push(` Commit: {#888888-fg}${run.sha.substring(0, 7)}{/#888888-fg}`)
     }
     // Show repository owner in smaller text if needed
-    lines.push(
-      ` Repo: {#888888-fg}${workflow.repository.owner}/${workflow.repository.name}{/#888888-fg}`,
-    )
+    lines.push(` Repo: {#888888-fg}${esc(run.repo.fullName)}{/#888888-fg}`)
     lines.push("")
 
     // Status with more detail
-    const statusIcon = this.getStatusIcon(workflow.status, workflow.conclusion)
-    const statusColor = this.getStatusColor(workflow.status, workflow.conclusion)
-    lines.push(` Status: {${statusColor}-fg}${statusIcon} ${workflow.status.toUpperCase()}{/}`)
+    const icon = statusIcon(run.status, run.isFailing)
+    const color = statusColor(run.status, run.isFailing)
+    lines.push(` Status: {${color}-fg}${icon} ${run.status.toUpperCase()}{/}`)
 
-    if (workflow.conclusion) {
-      lines.push(` Result: {${statusColor}-fg}${workflow.conclusion.toUpperCase()}{/}`)
-    }
-
-    // Show dismiss hint for completed workflows
-    if (workflow.status === "completed") {
+    // No separate Result line: with one neutral status there is no second
+    // verdict to print, and it would just repeat the word above.
+    if (isTerminal(run.status)) {
+      // Show dismiss hint for finished runs
       lines.push(` {#888888-fg}Press 'd' to dismiss{/#888888-fg}`)
     }
 
-    // Timing information
-    if (workflow.startedAt) {
-      const startTime = new Date(workflow.startedAt)
-      const now = new Date()
-      const duration = Math.floor((now.getTime() - startTime.getTime()) / 1000)
+    // Timing information. A finished run has an end; an in-flight one is
+    // measured against now.
+    if (run.startedAt) {
+      const startTime = new Date(run.startedAt)
+      const endTime = run.finishedAt ? new Date(run.finishedAt) : new Date()
+      const duration = Math.floor((endTime.getTime() - startTime.getTime()) / 1000)
       const minutes = Math.floor(duration / 60)
       const seconds = duration % 60
-      lines.push(` Running: {white-fg}${minutes}m ${seconds}s{/white-fg}`)
+      const label = run.finishedAt ? "Duration" : "Running"
+      lines.push(` ${label}: {white-fg}${minutes}m ${seconds}s{/white-fg}`)
     }
 
-    if (workflow.createdAt !== workflow.startedAt) {
+    if (run.createdAt !== run.startedAt) {
       const queueTime =
-        new Date(workflow.startedAt || workflow.createdAt).getTime() -
-        new Date(workflow.createdAt).getTime()
+        new Date(run.startedAt || run.createdAt).getTime() - new Date(run.createdAt).getTime()
       if (queueTime > 1000) {
         const queueSeconds = Math.floor(queueTime / 1000)
         lines.push(` Queue time: {#888888-fg}${queueSeconds}s{/#888888-fg}`)
@@ -1803,20 +1866,20 @@ Press '?', '/', or 'Esc' to close...`,
     if (jobs.length > 0) {
       lines.push(" {bold}Jobs & Steps:{/bold}")
       jobs.forEach((job) => {
-        const jobIcon = this.getStatusIcon(job.status, job.conclusion)
-        const jobColor = this.getStatusColor(job.status, job.conclusion)
-        const runnerInfo = job.runner_name ? ` [${job.runner_name}]` : ""
+        const jobIcon = statusIcon(job.status)
+        const jobColor = statusColor(job.status)
+        const agentInfo = job.agent ? ` [${esc(job.agent)}]` : ""
         lines.push(
-          ` {${jobColor}-fg}${jobIcon} ${job.name}{/${jobColor}-fg}{white-fg}${runnerInfo}{/white-fg}`,
+          ` {${jobColor}-fg}${jobIcon} ${esc(job.name)}{/${jobColor}-fg}{white-fg}${agentInfo}{/white-fg}`,
         )
 
         let hasSubSteps = false
         if (job.steps && job.steps.length > 0) {
           // Show progress for running jobs
-          if (job.status === "in_progress") {
-            const completedSteps = job.steps.filter((s) => s.status === "completed").length
+          if (job.status === "running") {
+            const completedSteps = job.steps.filter((s) => isTerminal(s.status)).length
             const totalSteps = job.steps.length
-            const currentStepIndex = job.steps.findIndex((s) => s.status === "in_progress")
+            const currentStepIndex = job.steps.findIndex((s) => s.status === "running")
 
             hasSubSteps = true
             lines.push(`   Progress: {cyan-fg}${completedSteps}/${totalSteps} steps{/cyan-fg}`)
@@ -1827,87 +1890,86 @@ Press '?', '/', or 'Esc' to close...`,
                 const step = job.steps[i]
                 const stepNumber = `${i + 1}/${totalSteps}`
 
-                if (step.status === "in_progress") {
+                if (step.status === "running") {
                   // Current running step - highlighted
                   const stepDuration = step.startedAt
                     ? Math.floor((Date.now() - new Date(step.startedAt).getTime()) / 1000)
                     : 0
 
                   lines.push(
-                    `   {bold}{yellow-fg}▶ ${stepNumber} ${step.name} (${stepDuration}s){/yellow-fg}{/bold}`,
+                    `   {bold}{yellow-fg}▶ ${stepNumber} ${esc(step.name)} (${stepDuration}s){/yellow-fg}{/bold}`,
                   )
                 } else {
-                  // Upcoming steps (pending, waiting)
-                  const stepIcon = step.status === "waiting" ? "⏳" : "○"
-                  lines.push(`   {white-fg}${stepIcon} ${stepNumber} ${step.name}{/white-fg}`)
+                  // Upcoming steps (queued, or paused for a human)
+                  const stepIcon = step.status === "blocked" ? "⏳" : "○"
+                  lines.push(`   {white-fg}${stepIcon} ${stepNumber} ${esc(step.name)}{/white-fg}`)
                 }
               }
             }
           }
 
-          // Show completion info for completed jobs
-          else if (job.status === "completed") {
-            const isExpanded = this.expandedJobs.has(job.id.toString())
+          // Show completion info for finished jobs
+          else if (isTerminal(job.status)) {
+            const isExpanded = this.expandedJobs.has(job.key)
 
             if (!isExpanded) {
               // Only show detail for failed jobs (which step failed)
-              if (job.conclusion === "failure") {
-                const failedStep = job.steps.find((s) => s.conclusion === "failure")
+              if (job.status === "failed" || job.status === "timed_out") {
+                const failedStep = job.steps.find(
+                  (s) => s.status === "failed" || s.status === "timed_out",
+                )
                 if (failedStep) {
                   hasSubSteps = true
-                  lines.push(`   {red-fg}✗ Failed at: ${failedStep.name}{/red-fg}`)
+                  lines.push(`   {red-fg}✗ Failed at: ${esc(failedStep.name)}{/red-fg}`)
                 }
               }
-              // Successful completed jobs: no sub-steps, the job line itself shows ✓
+              // Passed jobs: no sub-steps, the job line itself shows the tick
             } else {
               hasSubSteps = true
               // Expanded: show all steps with details
               job.steps.forEach((step, index) => {
                 const stepNumber = `${index + 1}/${job.steps?.length}`
-                const stepIcon =
-                  step.conclusion === "success"
-                    ? "✓"
-                    : step.conclusion === "failure"
-                      ? "✗"
-                      : step.conclusion === "skipped"
-                        ? "⊜"
-                        : "○"
-                const stepColor =
-                  step.conclusion === "success"
-                    ? "green"
-                    : step.conclusion === "failure"
-                      ? "red"
-                      : "#888888"
+                const stepIcon = statusIcon(step.status)
+                const stepColor = statusColor(step.status)
 
                 let duration = ""
-                if (step.startedAt && step.completedAt) {
+                if (step.startedAt && step.finishedAt) {
                   const dur = Math.floor(
-                    (new Date(step.completedAt).getTime() - new Date(step.startedAt).getTime()) /
+                    (new Date(step.finishedAt).getTime() - new Date(step.startedAt).getTime()) /
                       1000,
                   )
                   duration = ` (${dur}s)`
                 }
 
                 lines.push(
-                  `   {${stepColor}-fg}${stepIcon}{/${stepColor}-fg} {#888888-fg}${stepNumber}{/#888888-fg} ${step.name}{#888888-fg}${duration}{/#888888-fg}`,
+                  `   {${stepColor}-fg}${stepIcon}{/${stepColor}-fg} {#888888-fg}${stepNumber}{/#888888-fg} ${esc(step.name)}{#888888-fg}${duration}{/#888888-fg}`,
                 )
               })
             }
           }
 
           // Show queued job steps when there's room
-          else if (showAllSteps && (job.status === "queued" || job.status === "waiting")) {
+          else if (showAllSteps && job.status === "queued") {
             hasSubSteps = true
-            if (job.steps && job.steps.length > 0) {
-              lines.push(`   {#888888-fg}Queued - ${job.steps.length} steps pending{/#888888-fg}`)
-              job.steps.forEach((step, index) => {
-                const stepNumber = `${index + 1}/${job.steps?.length}`
-                lines.push(`   {#888888-fg}○ ${stepNumber} ${step.name}{/#888888-fg}`)
-              })
-            } else {
-              lines.push(`   {#888888-fg}Waiting to start...{/#888888-fg}`)
-            }
+            lines.push(`   {#888888-fg}Queued - ${job.steps.length} steps pending{/#888888-fg}`)
+            job.steps.forEach((step, index) => {
+              const stepNumber = `${index + 1}/${job.steps?.length}`
+              lines.push(`   {#888888-fg}○ ${stepNumber} ${esc(step.name)}{/#888888-fg}`)
+            })
           }
+        }
+        // Jobs without steps: a Buildkite command job, or one paused for a human.
+        else if (job.type === "manual" && job.status === "blocked") {
+          hasSubSteps = true
+          lines.push(`   {cyan-fg}waiting for unblock{/cyan-fg}`)
+        } else if (job.command) {
+          hasSubSteps = true
+          // Multi-line commands (a `command: |` block) show their first line.
+          const firstLine = job.command.split(/\r?\n/, 1)[0]
+          lines.push(`   {#888888-fg}${esc(firstLine)}{/#888888-fg}`)
+        } else if (showAllSteps && job.status === "queued") {
+          hasSubSteps = true
+          lines.push(`   {#888888-fg}Waiting to start...{/#888888-fg}`)
         }
 
         // Only add spacing after jobs that have sub-step detail
@@ -1922,64 +1984,42 @@ Press '?', '/', or 'Esc' to close...`,
     return lines.join("\n")
   }
 
-  private getStatusIcon(status: string, conclusion?: string): string {
-    if (status === "completed") {
-      switch (conclusion) {
-        case "success":
-          return "✓"
-        case "failure":
-          return "✗"
-        case "cancelled":
-          return "⊘"
-        case "skipped":
-          return "⊜"
-        default:
-          return "?"
-      }
-    }
+  /**
+   * A compact, red status-bar segment for the current refresh's error-level
+   * diagnostics — never info-level ones (a missing Buildkite token must stay
+   * silent, not become a permanent warning for users with no Buildkite
+   * account). Empty cards already show diagnostics in the empty-state panel,
+   * but healthy GitHub cards can otherwise hide a Buildkite provider that is
+   * loudly failing beside them; this is what keeps that visible without
+   * relying on the event log, which scrolls away. `this.diagnostics` is
+   * replaced wholesale on every `updateWorkflows` call, so this clears itself
+   * the moment a refresh no longer reports the error — nothing lingers.
+   */
+  private errorDiagnosticsSegment(available: number): string {
+    const errors = this.diagnostics.filter((d) => d.level === "error")
+    if (errors.length === 0) return ""
 
-    switch (status) {
-      case "in_progress":
-        return "●"
-      case "queued":
-        return "○"
-      default:
-        return "?"
+    const extra = errors.length - 1
+    const suffix = extra > 0 ? ` (+${extra} more)` : ""
+    const prefix = " | ⚠ "
+    // The message gets whatever the counts left over, capped at 60 so one
+    // long error never dominates a wide terminal.
+    const budget = Math.min(60, available - prefix.length - suffix.length)
+    // Fewer than this many characters of a message is noise, not information.
+    const MIN_MESSAGE = 12
+    if (budget >= MIN_MESSAGE) {
+      return ` | {red-fg}⚠ ${escTruncated(errors[0].message, budget)}${suffix}{/red-fg}`
     }
-  }
-
-  private getStatusColor(status: string, conclusion?: string): string {
-    if (status === "completed") {
-      switch (conclusion) {
-        case "success":
-          return "green"
-        case "failure":
-          return "red"
-        case "cancelled":
-          return "#888888"
-        case "skipped":
-          return "#888888"
-        default:
-          return "white"
-      }
-    }
-
-    switch (status) {
-      case "in_progress":
-        return "yellow"
-      case "queued":
-        return "#888888"
-      default:
-        return "white"
-    }
+    const bare = ` | ⚠ ${errors.length} error${errors.length === 1 ? "" : "s"}`
+    return bare.length <= available ? ` | {red-fg}${bare.slice(3)}{/red-fg}` : ""
   }
 
   private updateStatusBar(): void {
-    const runningCount = this.workflows.filter((w) => w.status === "in_progress").length
-    const queuedCount = this.workflows.filter(
-      (w) => w.status === "queued" || w.status === "waiting",
-    ).length
-    const completedCount = this.workflows.filter((w) => w.status === "completed").length
+    const runningCount = this.workflows.filter((w) => w.status === "running").length
+    const queuedCount = this.workflows.filter((w) => w.status === "queued").length
+    // A build paused for a human is the most actionable thing on the screen.
+    const blockedCount = this.workflows.filter((w) => w.status === "blocked").length
+    const completedCount = this.workflows.filter((w) => isTerminal(w.status)).length
 
     // Animated refresh indicator - using braille spinner for smoothness
     // Always reserve space for the spinner to prevent text jumping
@@ -1991,14 +2031,30 @@ Press '?', '/', or 'Esc' to close...`,
     // Use last refresh time if available
     const updateTime = this.lastRefreshTime || new Date()
 
-    // Line 1: Status counts and refresh indicator
-    let line1 = `${refreshIndicator}Last Update: ${updateTime.toLocaleTimeString()} | `
-    line1 += `{yellow-fg}●{/} Running: ${runningCount} | `
-    line1 += `{#888888-fg}○{/} Queued: ${queuedCount}`
-    if (completedCount > 0) {
-      line1 += ` | {green-fg}✓{/} Done: ${completedCount}`
+    // Line 1: Status counts and refresh indicator. It must never wrap: a
+    // wrapped line pushes the shortcut line out of the 4-row box (a tmux
+    // split is the usual culprit). The box's border takes two columns.
+    const width = Math.max(0, (this.screen.width as number) - 2)
+    const counts = (verbose: boolean): string => {
+      let text = `{yellow-fg}●{/} ${verbose ? "Running: " : ""}${runningCount} | `
+      text += `{#888888-fg}○{/} ${verbose ? "Queued: " : ""}${queuedCount}`
+      if (blockedCount > 0) {
+        text += ` | {cyan-fg}⏸{/} ${verbose ? "Blocked: " : ""}${blockedCount}`
+      }
+      if (completedCount > 0) {
+        text += ` | {green-fg}✓{/} ${verbose ? "Done: " : ""}${completedCount}`
+      }
+      return `${text} | ${verbose ? "Total: " : "Σ "}${this.workflows.length}`
     }
-    line1 += ` | Total: ${this.workflows.length}`
+    // Most to least verbose; the first that fits wins, and any error segment
+    // gets whatever width is left after it.
+    const candidates = [
+      `${refreshIndicator}Last Update: ${updateTime.toLocaleTimeString()} | ${counts(true)}`,
+      `${refreshIndicator}${counts(true)}`,
+      `${refreshIndicator}${counts(false)}`,
+    ]
+    let line1 = candidates.find((c) => visibleLength(c) <= width) ?? candidates[2]
+    line1 += this.errorDiagnosticsSegment(width - visibleLength(line1))
 
     // Line 2: Context-aware keyboard shortcuts
     const shortcuts = this.getContextualShortcuts()
@@ -2021,19 +2077,19 @@ Press '?', '/', or 'Esc' to close...`,
     this.screen.on("manual-refresh", callback)
   }
 
-  onOpenWorkflow(callback: (workflow: WorkflowRun) => void): void {
+  onOpenRun(callback: (run: Run) => void): void {
     this.screen.on("open-workflow", callback)
   }
 
-  onDismissWorkflow(callback: (workflow: WorkflowRun) => void): void {
+  onDismissRun(callback: (run: Run) => void): void {
     this.screen.on("dismiss-workflow", callback)
   }
 
-  onDismissAllCompleted(callback: (workflows: WorkflowRun[]) => void): void {
+  onDismissAllCompleted(callback: (runs: Run[]) => void): void {
     this.screen.on("dismiss-all-completed", callback)
   }
 
-  onResurrectWorkflow(callback: () => void): void {
+  onResurrectRun(callback: () => void): void {
     this.screen.on("resurrect-workflow", callback)
   }
 
@@ -2041,7 +2097,7 @@ Press '?', '/', or 'Esc' to close...`,
     this.screen.on("open-pr", callback)
   }
 
-  onKillWorkflow(callback: (workflow: WorkflowRun) => void): void {
+  onKillRun(callback: (run: Run) => void): void {
     this.screen.on("kill-workflow", callback)
   }
 
@@ -2080,11 +2136,11 @@ Press '?', '/', or 'Esc' to close...`,
     this.screen.on("pr-action" as never, callback as never)
   }
 
-  onWorkflowRerun(callback: (workflow: WorkflowRun) => void): void {
+  onRunRerun(callback: (run: Run) => void): void {
     this.screen.on("workflow-rerun" as never, callback as never)
   }
 
-  onWorkflowLogs(callback: (workflow: WorkflowRun) => void): void {
+  onRunLogs(callback: (run: Run) => void): void {
     this.screen.on("workflow-logs" as never, callback as never)
   }
 
@@ -2144,21 +2200,24 @@ Press '?', '/', or 'Esc' to close...`,
 
         const shortcuts = [...baseShortcuts, "Enter: open"]
 
-        if (workflow.status === "in_progress" || workflow.status === "queued") {
+        if (isActive(workflow.status)) {
           shortcuts.push("k: cancel")
-        } else if (workflow.status === "completed") {
-          shortcuts.push("r: re-run", "d: dismiss")
+          // A pipeline that blocks on a manual gate every run would otherwise
+          // pile up cards nobody can clear.
+          if (workflow.status === "blocked") shortcuts.push("d: dismiss")
+        } else {
+          shortcuts.push(`r: ${rerunVerb(workflow)}`, "d: dismiss")
         }
 
         shortcuts.push("l: logs")
 
-        // Add job step expand/collapse shortcut if there are completed jobs
-        const workflowJobs = this.jobsCache.get(workflow.id.toString())
-        const hasCompletedJobs = workflowJobs?.some((job) => job.status === "completed")
+        // Add job step expand/collapse shortcut if there are finished jobs
+        const workflowJobs = this.jobsCache.get(workflow.key)
+        const hasCompletedJobs = workflowJobs?.some((job) => isTerminal(job.status))
         if (hasCompletedJobs) {
           // Check if any jobs are expanded to show appropriate action
           const anyExpanded = workflowJobs?.some(
-            (job) => job.status === "completed" && this.expandedJobs.has(job.id.toString()),
+            (job) => isTerminal(job.status) && this.expandedJobs.has(job.key),
           )
           shortcuts.push(anyExpanded ? "j: collapse steps" : "j: expand steps")
         }
@@ -2799,27 +2858,27 @@ Press '?', '/', or 'Esc' to close...`,
     const workflow = this.workflows[this.selectedIndex]
     if (!workflow) return
 
-    // For job step collapse, we'll collapse/expand based on the selected workflow's jobs
-    const workflowJobs = this.jobsCache.get(workflow.id.toString())
+    // For job step collapse, we'll collapse/expand based on the selected run's jobs
+    const workflowJobs = this.jobsCache.get(workflow.key)
     if (!workflowJobs || workflowJobs.length === 0) return
 
-    // Find completed jobs in the workflow
-    const completedJobs = workflowJobs.filter((job) => job.status === "completed")
+    // Find finished jobs in the run
+    const completedJobs = workflowJobs.filter((job) => isTerminal(job.status))
     if (completedJobs.length === 0) return
 
     // Check if any completed jobs are currently expanded (since collapsed is default)
-    const anyExpanded = completedJobs.some((job) => this.expandedJobs.has(job.id.toString()))
+    const anyExpanded = completedJobs.some((job) => this.expandedJobs.has(job.key))
 
     if (anyExpanded) {
-      // Collapse all completed jobs for this workflow (remove from expanded set)
+      // Collapse all completed jobs for this run (remove from expanded set)
       completedJobs.forEach((job) => {
-        this.expandedJobs.delete(job.id.toString())
+        this.expandedJobs.delete(job.key)
       })
       this.log("Collapsed job steps for completed jobs", "info")
     } else {
-      // Expand all completed jobs for this workflow (add to expanded set)
+      // Expand all completed jobs for this run (add to expanded set)
       completedJobs.forEach((job) => {
-        this.expandedJobs.add(job.id.toString())
+        this.expandedJobs.add(job.key)
       })
       this.log("Expanded job steps for completed jobs", "info")
     }
@@ -2837,7 +2896,7 @@ Press '?', '/', or 'Esc' to close...`,
     if (this.zoomedMode) {
       // Entering zoom mode - save the selected workflow
       this.zoomedWorkflowIndex = this.selectedIndex
-      this.log(`Zoomed on workflow: ${workflow.name || workflow.workflowName}`, "info")
+      this.log(`Zoomed on workflow: ${workflow.title || workflow.pipeline}`, "info")
     } else {
       // Exiting zoom mode
       this.log("Exited zoom mode", "info")
@@ -2886,13 +2945,18 @@ Press '?', '/', or 'Esc' to close...`,
 
   private loadPreferences(): void {
     try {
-      const prefsPath = path.join(os.homedir(), ".gh-hud-prefs.json")
+      const prefsPath = path.join(os.homedir(), ".ops-hud-prefs.json")
+      // Fall back to the pre-rename prefs file so an upgrading user's saved
+      // layout survives; savePreferences() always writes the new path, so
+      // this fallback is only ever read, never written.
+      const legacyPrefsPath = path.join(os.homedir(), ".gh-hud-prefs.json")
+      const readPath = fs.existsSync(prefsPath) ? prefsPath : legacyPrefsPath
 
       // Store preference info for logging after UI is ready
-      this.pendingPrefsLog = [`Preferences file: ${prefsPath}`]
+      this.pendingPrefsLog = [`Preferences file: ${readPath}`]
 
-      if (fs.existsSync(prefsPath)) {
-        const content = fs.readFileSync(prefsPath, "utf8")
+      if (fs.existsSync(readPath)) {
+        const content = fs.readFileSync(readPath, "utf8")
         if (content) {
           const prefs = JSON.parse(content)
           this.pendingPrefsLog.push(`Loaded preferences: ${JSON.stringify(prefs)}`)
@@ -2940,7 +3004,9 @@ Press '?', '/', or 'Esc' to close...`,
 
   private savePreferences(): void {
     try {
-      const prefsPath = path.join(os.homedir(), ".gh-hud-prefs.json")
+      // Always the new path — loadPreferences() reads the legacy one only
+      // as a fallback, so the first save migrates the user off it.
+      const prefsPath = path.join(os.homedir(), ".ops-hud-prefs.json")
 
       const prefs = {
         debugBoxHeight: this.debugBoxHeight,
@@ -2963,38 +3029,39 @@ Press '?', '/', or 'Esc' to close...`,
   }
 
   // Track workflow status changes
-  private trackWorkflowChanges(newWorkflows: WorkflowRun[]): void {
-    const oldWorkflowMap = new Map(this.workflows.map((w) => [w.id, w]))
+  private trackWorkflowChanges(newWorkflows: Run[]): void {
+    // Keyed by Run.key: ids are only unique within a provider.
+    const oldWorkflowMap = new Map(this.workflows.map((w) => [w.key, w]))
 
     for (const workflow of newWorkflows) {
-      const oldWorkflow = oldWorkflowMap.get(workflow.id)
+      const oldWorkflow = oldWorkflowMap.get(workflow.key)
 
       if (!oldWorkflow) {
-        // New workflow appeared
+        // New run appeared
         this.log(
-          `New workflow: ${workflow.repository.owner}/${workflow.repository.name} - ${workflow.workflowName} #${workflow.runNumber}`,
+          `New workflow: ${workflow.repo.fullName} - ${workflow.pipeline} #${workflow.number}`,
           "event",
         )
       } else if (oldWorkflow.status !== workflow.status) {
-        // Status changed
-        const statusIcon = this.getStatusIcon(workflow.status, workflow.conclusion)
-        this.log(
-          `Status change: ${workflow.workflowName} #${workflow.runNumber}: ${oldWorkflow.status} → ${workflow.status} ${statusIcon}`,
-          "event",
-        )
-      } else if (oldWorkflow.conclusion !== workflow.conclusion && workflow.conclusion) {
-        // Conclusion changed
-        this.log(
-          `Completed: ${workflow.workflowName} #${workflow.runNumber}: ${workflow.conclusion}`,
-          "event",
-        )
+        if (isTerminal(workflow.status)) {
+          // Reached a verdict
+          this.log(
+            `Completed: ${workflow.pipeline} #${workflow.number}: ${workflow.status}`,
+            "event",
+          )
+        } else {
+          this.log(
+            `Status change: ${workflow.pipeline} #${workflow.number}: ${oldWorkflow.status} → ${workflow.status} ${statusIcon(workflow.status, workflow.isFailing)}`,
+            "event",
+          )
+        }
       }
     }
 
-    // Check for removed workflows
+    // Check for removed runs
     for (const oldWorkflow of this.workflows) {
-      if (!newWorkflows.find((w) => w.id === oldWorkflow.id)) {
-        this.log(`Removed: ${oldWorkflow.workflowName} #${oldWorkflow.runNumber}`, "event")
+      if (!newWorkflows.find((w) => w.key === oldWorkflow.key)) {
+        this.log(`Removed: ${oldWorkflow.pipeline} #${oldWorkflow.number}`, "event")
       }
     }
   }

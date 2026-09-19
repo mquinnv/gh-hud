@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "gh-hud",
+      "name": "ops-hud",
       "dependencies": {
         "blessed": "^0.1.81",
         "chalk": "^5.6.2",

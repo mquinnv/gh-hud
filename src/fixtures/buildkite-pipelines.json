@@ -1,0 +1,57 @@
+[
+  {
+    "id": "01a0ac8e-7a99-411f-8fdd-af5dbf162031",
+    "url": "https://api.buildkite.com/v2/organizations/ameriglide/pipelines/site-content-usm",
+    "web_url": "https://buildkite.com/ameriglide/site-content-usm",
+    "name": "site-content-usm",
+    "slug": "site-content-usm",
+    "repository": "git@github.com:inetalliance/usm.git",
+    "default_branch": "main",
+    "visibility": "private",
+    "created_at": "2026-09-16T23:30:13.901Z"
+  },
+  {
+    "id": "01a0ac8e-7111-4ba3-bc31-864f5601245b",
+    "url": "https://api.buildkite.com/v2/organizations/ameriglide/pipelines/site-content-usm-distributors",
+    "web_url": "https://buildkite.com/ameriglide/site-content-usm-distributors",
+    "name": "site-content-usm-distributors",
+    "slug": "site-content-usm-distributors",
+    "repository": "git@github.com:inetalliance/distributors.git",
+    "default_branch": "main",
+    "visibility": "private",
+    "created_at": "2026-09-16T23:30:11.476Z"
+  },
+  {
+    "id": "01a0ac8d-5be0-4754-b43e-ce1c8bffc453",
+    "url": "https://api.buildkite.com/v2/organizations/ameriglide/pipelines/site-content-base",
+    "web_url": "https://buildkite.com/ameriglide/site-content-base",
+    "name": "site-content-base",
+    "slug": "site-content-base",
+    "repository": "git@github.com:inetalliance/base.git",
+    "default_branch": "main",
+    "visibility": "private",
+    "created_at": "2026-09-16T23:29:00.485Z"
+  },
+  {
+    "id": "01a0ac8d-6439-498f-b1e0-ba7f2b7ae9d5",
+    "url": "https://api.buildkite.com/v2/organizations/ameriglide/pipelines/beejax-platform-credential-check",
+    "web_url": "https://buildkite.com/ameriglide/beejax-platform-credential-check",
+    "name": "beejax-platform-credential-check",
+    "slug": "beejax-platform-credential-check",
+    "repository": "git@github.com:inetalliance/beejax-platform.git",
+    "default_branch": "main",
+    "visibility": "private",
+    "created_at": "2026-09-16T23:29:02.607Z"
+  },
+  {
+    "id": "01a0ac8b-1316-4bdf-8345-fdce4dd9b9af",
+    "url": "https://api.buildkite.com/v2/organizations/ameriglide/pipelines/beejax-platform-media-webp-reconcile",
+    "web_url": "https://buildkite.com/ameriglide/beejax-platform-media-webp-reconcile",
+    "name": "beejax-platform-media-webp-reconcile",
+    "slug": "beejax-platform-media-webp-reconcile",
+    "repository": "https://github.com/inetalliance/beejax-platform",
+    "default_branch": "main",
+    "visibility": "private",
+    "created_at": "2026-09-16T23:26:30.741Z"
+  }
+]

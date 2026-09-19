@@ -4,8 +4,8 @@ import { readFile } from "fs/promises"
 import { homedir } from "os"
 import { join, resolve } from "path"
 import type { Dashboard } from "./dashboard.js"
-import type { GitHubService } from "./github.js"
-import type { Config, Repository } from "./types.js"
+import type { GitHubProvider } from "./providers/github.js"
+import type { BuildkiteConfig, Config, Repository } from "./types.js"
 
 // Extract "owner/repo" from a GitHub remote URL, or null if it isn't one.
 // Handles https://github.com/owner/repo(.git) and git@github.com:owner/repo(.git).
@@ -16,14 +16,19 @@ export function parseGitHubRemote(url: string): string | null {
   return match ? `${match[1]}/${match[2]}` : null
 }
 
+/** Runs `gh` in a directory and returns stdout. A seam so tests never call the real `gh`. */
+export type GhRunner = (args: string[], cwd: string) => Promise<string>
+
+const runGh: GhRunner = async (args, cwd) => {
+  const { stdout } = await execa("gh", args, { cwd, timeout: 2000 })
+  return stdout
+}
+
 // Resolve the GitHub repository that owns `dir`, or null if there isn't one.
-export async function resolveRepoAtPath(dir: string): Promise<string | null> {
+export async function resolveRepoAtPath(dir: string, gh: GhRunner = runGh): Promise<string | null> {
   try {
     // gh knows about renames and non-origin remotes, so prefer it.
-    const { stdout } = await execa("gh", ["repo", "view", "--json", "owner,name"], {
-      cwd: dir,
-      timeout: 2000,
-    })
+    const stdout = await gh(["repo", "view", "--json", "owner,name"], dir)
     const repoInfo = JSON.parse(stdout)
     if (repoInfo.owner?.login && repoInfo.name) {
       return `${repoInfo.owner.login}/${repoInfo.name}`
@@ -43,14 +48,17 @@ export async function resolveRepoAtPath(dir: string): Promise<string | null> {
 // Turn a user-supplied path into the repository to monitor. Throws with a
 // message meant for stderr — the caller must fail before blessed takes the
 // screen, or the error becomes an invisible empty dashboard.
-export async function resolveScope(path: string): Promise<{ repo: string; dir: string }> {
+export async function resolveScope(
+  path: string,
+  gh: GhRunner = runGh,
+): Promise<{ repo: string; dir: string }> {
   const dir = resolve(path)
 
   if (!existsSync(dir)) {
     throw new Error(`No such directory: ${dir}`)
   }
 
-  const repo = await resolveRepoAtPath(dir)
+  const repo = await resolveRepoAtPath(dir, gh)
   if (!repo) {
     throw new Error(`Not a GitHub checkout (no github.com remote found): ${dir}`)
   }
@@ -63,26 +71,44 @@ const DEFAULT_CONFIG: Config = {
   organizations: [], // Don't default to any orgs
   refreshInterval: 5000, // 5 seconds
   maxWorkflows: 20,
-  filterStatus: [], // Show all statuses by default
   showCompletedFor: 60, // minutes - show completed for longer
+  buildkite: {},
 }
 
 export class ConfigManager {
   private config: Config = { ...DEFAULT_CONFIG }
+  /** The file `loadConfig` read, if any — so a shadowed legacy file is visible. */
+  loadedPath?: string
 
-  async loadConfig(configPath?: string): Promise<Config> {
+  /**
+   * `homeDir` is a seam for the tests, which must never read the developer's
+   * real `~/.ops-hud.json`.
+   */
+  async loadConfig(
+    configPath?: string,
+    baseDir: string = process.cwd(),
+    homeDir: string = homedir(),
+  ): Promise<Config> {
     const paths = [
       configPath,
-      ".gh-hud.json",
-      join(homedir(), ".gh-hud.json"),
-      join(homedir(), ".config", "gh-hud", "config.json"),
+      join(baseDir, ".ops-hud.json"),
+      join(homeDir, ".ops-hud.json"),
+      join(homeDir, ".config", "ops-hud", "config.json"),
+      // Legacy gh-hud locations, kept so the 2.0 rename doesn't silently drop
+      // an existing user's configuration.
+      join(baseDir, ".gh-hud.json"),
+      join(homeDir, ".gh-hud.json"),
+      join(homeDir, ".config", "gh-hud", "config.json"),
     ].filter(Boolean) as string[]
 
     for (const path of paths) {
       try {
         const content = await readFile(path, "utf-8")
-        const userConfig = JSON.parse(content)
+        // `filterStatus` was a 1.x key that no filter ever read. Old files
+        // that still carry it keep loading; the key is simply dropped.
+        const { filterStatus: _ignored, ...userConfig } = JSON.parse(content)
         this.config = { ...DEFAULT_CONFIG, ...userConfig }
+        this.loadedPath = path
         break
       } catch (_error) {
         // Config file doesn't exist or is invalid, continue to next
@@ -122,19 +148,16 @@ export class ConfigManager {
     return this.config.maxWorkflows || 20
   }
 
-  get filterStatus(): string[] {
-    return this.config.filterStatus || []
-  }
-
   get showCompletedFor(): number {
     return this.config.showCompletedFor || 5
   }
 
+  get buildkite(): BuildkiteConfig {
+    return this.config.buildkite ?? {}
+  }
+
   // Build final list of repositories from config and orgs
-  async buildRepositoryList(
-    githubService: GitHubService,
-    dashboard?: Dashboard,
-  ): Promise<string[]> {
+  async buildRepositoryList(github: GitHubProvider, dashboard?: Dashboard): Promise<string[]> {
     const repos = new Set<string>()
 
     // Add explicitly configured repositories
@@ -147,7 +170,7 @@ export class ConfigManager {
       try {
         if (dashboard) dashboard.log(`Fetching repositories for org: ${org}`, "debug")
         const orgRepos = await Promise.race([
-          githubService.listRepositories(org),
+          github.listRepositories(org),
           new Promise<Repository[]>((_, reject) =>
             setTimeout(() => reject(new Error("Timeout")), 15000),
           ),

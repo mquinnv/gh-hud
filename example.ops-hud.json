@@ -1,0 +1,11 @@
+{
+  "repositories": ["mquinnv/ops-hud", "mquinnv/spec-workflow-dashboard"],
+  "organizations": ["mquinnv", "phenixcrm", "inetalliance", "ameriglide"],
+  "refreshInterval": 5000,
+  "maxWorkflows": 20,
+  "showCompletedFor": 5,
+  "buildkite": {
+    "org": "my-buildkite-org",
+    "pipelines": []
+  }
+}
